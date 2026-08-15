@@ -4,26 +4,13 @@ import pathlib
 import subprocess
 import sys
 
-from github_model import ask_model
+from openai_responses import ask_model
 
 
 MAX_CONTEXT_BYTES = 120_000
 ALLOWED_COMMAND_PREFIXES = (
-    "python ",
-    "python3 ",
-    "pytest",
-    "pip ",
-    "pip3 ",
-    "npm ",
-    "npx ",
-    "pnpm ",
-    "yarn ",
-    "node ",
-    "ruff ",
-    "mypy ",
-    "eslint ",
-    "tsc ",
-    "vite ",
+    "python ", "python3 ", "pytest", "pip ", "pip3 ", "npm ", "npx ",
+    "pnpm ", "yarn ", "node ", "ruff ", "mypy ", "eslint ", "tsc ", "vite ",
 )
 
 
@@ -32,7 +19,6 @@ def project_context(root: pathlib.Path) -> str:
     chunks = []
     total = 0
     ignored = {".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache"}
-
     for path in sorted(root.rglob("*")):
         if not path.is_file() or any(part in ignored for part in path.parts):
             continue
@@ -68,14 +54,7 @@ def run_command(root: pathlib.Path, command: str) -> tuple[int, str]:
     command = command.strip()
     if not command or not command.startswith(ALLOWED_COMMAND_PREFIXES):
         return 2, f"دستور غیرمجاز: {command}"
-    result = subprocess.run(
-        command,
-        cwd=root,
-        shell=True,
-        text=True,
-        capture_output=True,
-        timeout=600,
-    )
+    result = subprocess.run(command, cwd=root, shell=True, text=True, capture_output=True, timeout=600)
     output = (result.stdout + "\n" + result.stderr).strip()
     return result.returncode, output[-20_000:]
 
@@ -85,52 +64,25 @@ def main() -> int:
     if not task:
         print("خطا: دستور عامل خالی است.")
         return 2
-
     root = pathlib.Path(os.getenv("AGENT_WORKSPACE", ".")).resolve()
     feedback = ""
-
     for iteration in range(1, int(os.getenv("MAX_ITERATIONS", "8")) + 1):
         print(f"\n=== دور مهندسی {iteration} ===")
-        context = project_context(root)
-        plan = ask_model(task, context, feedback)
+        plan = ask_model(task, project_context(root), feedback)
         apply_files(root, plan.get("files", []))
-
         results = []
-        commands = plan.get("commands", [])
-        for command in commands[:8]:
+        for command in plan.get("commands", [])[:8]:
             code, output = run_command(root, command)
             results.append({"command": command, "code": code, "output": output})
             print(f"$ {command}\n{output}")
             if code != 0:
                 break
-
         failed = [item for item in results if item["code"] != 0]
         if not failed and plan.get("done", False):
-            pathlib.Path("agent-result.json").write_text(
-                json.dumps(
-                    {
-                        "success": True,
-                        "iteration": iteration,
-                        "summary": plan.get("summary", "کار با موفقیت انجام شد."),
-                        "tests": results,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
+            pathlib.Path("agent-result.json").write_text(json.dumps({"success": True, "iteration": iteration, "summary": plan.get("summary", "کار با موفقیت انجام شد."), "tests": results}, ensure_ascii=False, indent=2), encoding="utf-8")
             return 0
-
         feedback = json.dumps(results, ensure_ascii=False, indent=2)
-
-    pathlib.Path("agent-result.json").write_text(
-        json.dumps(
-            {"success": False, "summary": "عامل به سقف تعداد دورهای مجاز رسید.", "feedback": feedback},
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    pathlib.Path("agent-result.json").write_text(json.dumps({"success": False, "summary": "عامل به سقف تعداد دورهای مجاز رسید.", "feedback": feedback}, ensure_ascii=False, indent=2), encoding="utf-8")
     return 1
 
 
