@@ -65,6 +65,9 @@ jobs:
       - name: اجرای حلقه مهندسی
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          AI_FALLBACK_API_KEY: ${{ secrets.AI_FALLBACK_API_KEY }}
+          AI_FALLBACK_BASE_URL: ${{ secrets.AI_FALLBACK_BASE_URL }}
+          AI_FALLBACK_MODEL: ${{ secrets.AI_FALLBACK_MODEL }}
           MAX_ITERATIONS: "8"
           AI_MODEL: "gpt-5.6"
         run: |
