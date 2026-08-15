@@ -41,7 +41,7 @@ jobs:
         run: |
           git clone https://github.com/mydsoftware/AI-Agent-Manager.git ai-agent-manager
           cd ai-agent-manager
-          git checkout c55025530e32808bc31d2171d07fafb9e7debaf
+          git checkout c55025530e32843bda00e719c310b0d04a29fe3e
       - name: بررسی ساختار Python
         run: python -m py_compile agent/security_gate.py
       - name: آزمون Security Gate
@@ -78,7 +78,7 @@ jobs:
         run: |
           git clone https://github.com/mydsoftware/AI-Agent-Manager.git ai-agent-manager
           cd ai-agent-manager
-          git checkout c55025530e32808bc31d2171d07fafb9e7debaf
+          git checkout c55025530e32843bda00e719c310b0d04a29fe3e
       - name: آماده‌سازی پایتون
         uses: actions/setup-python@v6
         with:
