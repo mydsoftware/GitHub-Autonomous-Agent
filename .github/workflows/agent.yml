@@ -49,49 +49,41 @@ jobs:
           git diff --cached --quiet || git commit -m "🤖 اجرای تغییرات تولیدشده توسط ChatGPT"
           git push
 
-      - name: ساخت ZIP قابل استفاده
+      - name: اعتبارسنجی و آماده‌سازی خروجی سایت
         if: success() && hashFiles('site/**') != ''
         run: |
-          rm -f site.zip
           python - <<'PY'
           from pathlib import Path
           from zipfile import ZipFile, ZIP_DEFLATED
           root = Path("site")
-          out = Path("site.zip")
           files = [p for p in root.rglob("*") if p.is_file()]
           if not files:
               raise SystemExit("پوشه site خالی است")
+          if not (root / "index.html").is_file():
+              raise SystemExit("index.html وجود ندارد")
+          out = Path("site.zip")
           with ZipFile(out, "w", ZIP_DEFLATED) as z:
               for p in files:
                   z.write(p, p.relative_to(root).as_posix())
           with ZipFile(out, "r") as z:
               names = z.namelist()
-              if any(Path(n).name == "site.zip" for n in names):
+              if any(Path(n).name == "site.zip" or n.endswith(".zip") for n in names):
                   raise SystemExit("ZIP تو در تو شناسایی شد")
               if "index.html" not in names:
                   raise SystemExit("index.html در ZIP وجود ندارد")
-              bad = z.testzip()
-              if bad:
-                  raise SystemExit(f"ZIP خراب است: {bad}")
-          print("ساختار ZIP معتبر:")
-          for n in names:
-              print(n)
+              if z.testzip() is not None:
+                  raise SystemExit("ZIP خراب است")
+          print("ZIP واقعی سایت معتبر است")
+          print("\n".join(names))
           PY
 
-      - name: تحویل فایل‌های واقعی سایت
+      # GitHub Artifact خودش یک ZIP می‌سازد؛ بنابراین فایل site.zip را هرگز داخل Artifact قرار نمی‌دهیم.
+      - name: تحویل خروجی سایت به‌صورت فایل‌های واقعی
         if: always() && hashFiles('site/**') != ''
         uses: actions/upload-artifact@v5
         with:
-          name: فایل‌های-سایت-ساخته‌شده
+          name: خروجی-سایت-نهایی
           path: site/
-          if-no-files-found: error
-
-      - name: تحویل ZIP قابل استفاده
-        if: always() && hashFiles('site.zip') != ''
-        uses: actions/upload-artifact@v5
-        with:
-          name: ZIP-سایت-قابل-استفاده
-          path: site.zip
           if-no-files-found: error
 
       - name: آماده‌سازی انتشار GitHub Pages
@@ -120,7 +112,7 @@ jobs:
           if [ -n "${{ steps.deployment.outputs.page_url }}" ]; then
             echo "لینک سایت: ${{ steps.deployment.outputs.page_url }}" >> agent-result.txt
           else
-            echo "GitHub Pages در دسترس نبود؛ ZIP معتبر و فایل‌های واقعی سایت در Artifact قرار گرفتند." >> agent-result.txt
+            echo "GitHub Pages در دسترس نبود؛ خروجی سایت در Artifact قرار گرفت." >> agent-result.txt
           fi
 
       - name: بارگذاری گزارش
@@ -151,7 +143,7 @@ jobs:
                 echo "$SITE_URL"
               else
                 echo "### خروجی"
-                echo "GitHub Pages در دسترس نبود؛ Artifactهای ZIP و فایل‌های واقعی سایت در این اجرای Workflow قرار گرفته‌اند."
+                echo "GitHub Pages در دسترس نبود؛ خروجی سایت در Artifact قرار گرفته است."
               fi
             } > agent-comment.md
             gh issue comment "$ISSUE_NUMBER" --body-file agent-comment.md
