@@ -1,20 +1,26 @@
-# GitHub Autonomous Agent
+# عامل خودمختار گیت‌هاب
 
-Autonomous software engineering agent running through GitHub Actions.
+عامل مهندسی نرم‌افزار خودمختار که از طریق GitHub Actions اجرا می‌شود.
 
-## Goal
+## هدف
 
-Receive a natural-language software request, plan it, implement it, test it, repair failures, commit the result, and optionally deploy it.
+دریافت درخواست نرم‌افزاری به زبان طبیعی، تحلیل و برنامه‌ریزی آن، پیاده‌سازی، اجرای تست‌ها، شناسایی و اصلاح خطاها، ثبت تغییرات در گیت و در صورت نیاز انتشار پروژه.
 
-## Architecture
+## معماری
 
-- GitHub Issues / workflow dispatch: task input
-- GitHub Actions: execution loop
-- AI provider: planning and coding
-- Repository workspace: generated project
-- Tests/build: validation and self-repair
-- GitHub Pages / deployment target: optional delivery
+- **Issueهای گیت‌هاب / اجرای دستی Workflow:** ورودی دستور
+- **GitHub Actions:** موتور اجرای حلقه خودمختار
+- **مدل هوش مصنوعی:** تحلیل، برنامه‌ریزی و تولید کد
+- **محیط کاری مخزن:** محل ساخت و تغییر پروژه
+- **تست و Build:** اعتبارسنجی و اصلاح خودکار
+- **GitHub Pages یا مقصد انتشار:** تحویل اختیاری خروجی
 
-## Current status
+## وضعیت فعلی
 
-Bootstrap phase. The next steps add the agent runtime, task intake workflow, configuration, safe execution loop, and delivery reporting.
+مرحله راه‌اندازی اولیه.
+
+مراحل بعدی شامل اجرای واقعی عامل، سیستم دریافت دستور، اتصال به مدل هوش مصنوعی، حلقه امن اجرای وظایف و گزارش تحویل خواهد بود.
+
+## زبان پروژه
+
+تمام مستندات، توضیحات و کامنت‌های پروژه باید فارسی باشند؛ نام فایل‌ها، متغیرها، توابع و شناسه‌های فنی در صورت نیاز انگلیسی باقی می‌مانند تا با استانداردهای برنامه‌نویسی سازگار باشند.
