@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -46,7 +47,7 @@ def _request_github_models(token: str, model: str, prompt: str) -> dict:
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2026-03-10",
+            "X-GitHub-Api-Version": "2022-11-28",
             "Content-Type": "application/json",
         },
         method="POST",
@@ -101,8 +102,17 @@ def _parse_model_result(text: str) -> dict:
     return json.loads(text)
 
 
+def _github_models(model: str):
+    """مدل اصلی و مدل‌های جایگزین GitHub Models را به ترتیب امتحان می‌کند."""
+    configured = os.getenv("GITHUB_MODELS_MODELS", "")
+    models = [m.strip() for m in configured.split(",") if m.strip()]
+    if model and model not in models:
+        models.insert(0, model)
+    return models or ["openai/gpt-4.1", "openai/gpt-4o"]
+
+
 def ask_model(task: str, context: str, feedback: str = "") -> dict:
-    """ابتدا از GitHub Models با GITHUB_TOKEN استفاده می‌کند و سپس Providerهای جایگزین را امتحان می‌کند."""
+    """زنجیره مدل را اجرا می‌کند: GitHub Models، سپس Provider جایگزین در صورت وجود."""
     prompt = f"""
 درخواست کاربر:
 {task}
@@ -116,26 +126,25 @@ def ask_model(task: str, context: str, feedback: str = "") -> dict:
 بر اساس این اطلاعات، فایل‌های لازم را تولید یا اصلاح کن.
 """.strip()
 
-    providers = [
-        (
-            "GitHub Models",
-            os.environ.get("GITHUB_TOKEN", ""),
-            os.getenv("GITHUB_MODELS_MODEL", "openai/gpt-4.1"),
-        ),
-    ]
-
     last_error = None
-    for name, token, model in providers:
-        if not token or not model:
-            continue
-        try:
-            data = _request_github_models(token, model, prompt)
-            return _parse_model_result(_extract_text(data, github_models=True))
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            last_error = RuntimeError(f"خطای {name} ({exc.code}): {body[:2000]}")
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            last_error = RuntimeError(f"خطای ارتباط یا پاسخ {name}: {exc}")
+    github_token = os.environ.get("GITHUB_TOKEN", "")
+    for model in _github_models(os.getenv("GITHUB_MODELS_MODEL", "openai/gpt-4.1")):
+        if not github_token:
+            break
+        for attempt in range(2):
+            try:
+                data = _request_github_models(github_token, model, prompt)
+                return _parse_model_result(_extract_text(data, github_models=True))
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                last_error = RuntimeError(f"خطای GitHub Models با مدل {model} ({exc.code}): {body[:2000]}")
+                if exc.code in (429, 500, 502, 503, 504) and attempt == 0:
+                    time.sleep(3)
+                    continue
+                break
+            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                last_error = RuntimeError(f"خطای ارتباط یا پاسخ GitHub Models با مدل {model}: {exc}")
+                break
 
     fallback = (
         os.environ.get("AI_FALLBACK_API_KEY", ""),
@@ -143,13 +152,19 @@ def ask_model(task: str, context: str, feedback: str = "") -> dict:
         os.getenv("AI_FALLBACK_MODEL", ""),
     )
     if all(fallback):
-        try:
-            data = _request_openai(fallback[1], fallback[0], fallback[2], prompt)
-            return _parse_model_result(_extract_text(data))
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            last_error = RuntimeError(f"خطای Provider جایگزین ({exc.code}): {body[:2000]}")
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            last_error = RuntimeError(f"خطای ارتباط یا پاسخ Provider جایگزین: {exc}")
+        for attempt in range(2):
+            try:
+                data = _request_openai(fallback[1], fallback[0], fallback[2], prompt)
+                return _parse_model_result(_extract_text(data))
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                last_error = RuntimeError(f"خطای Provider جایگزین ({exc.code}): {body[:2000]}")
+                if exc.code in (429, 500, 502, 503, 504) and attempt == 0:
+                    time.sleep(3)
+                    continue
+                break
+            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                last_error = RuntimeError(f"خطای ارتباط یا پاسخ Provider جایگزین: {exc}")
+                break
 
     raise last_error or RuntimeError("هیچ Provider فعالی برای مدل تنظیم نشده است.")
