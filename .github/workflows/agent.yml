@@ -87,11 +87,19 @@ jobs:
       - name: ثبت تغییرات
         if: success()
         run: |
+          set -e
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .
-          git diff --cached --quiet || git commit -m "🤖 اجرای دستور تولیدشده توسط ChatGPT"
-          git push
+          if git diff --cached --quiet; then
+            echo "تغییری برای ثبت وجود ندارد."
+            exit 0
+          fi
+          git commit -m "🤖 اجرای دستور تولیدشده توسط ChatGPT"
+          echo "دریافت آخرین تغییرات remote برای جلوگیری از خطای non-fast-forward..."
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
 
       - name: اعتبارسنجی و آماده‌سازی خروجی سایت
         if: success() && hashFiles('site/**') != ''
