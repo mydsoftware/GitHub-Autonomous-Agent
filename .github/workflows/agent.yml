@@ -3,9 +3,13 @@ name: اجرای عامل متصل به ChatGPT
 on:
   workflow_dispatch:
     inputs:
-      اجرا:
-        description: "اجرای برنامه‌ای که ChatGPT در chatgpt_plan.json قرار داده است"
+      دستور:
+        description: "دستور کامل کاربر برای Agent؛ مثال: یک سایت حرفه‌ای فارسی درباره ماهواره مرکزی بساز"
         required: true
+        type: string
+      اجرا:
+        description: "اجرای Plan تولیدشده توسط ChatGPT"
+        required: false
         type: boolean
         default: true
   issues:
@@ -37,6 +41,46 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: دریافت دستور واقعی کاربر
+        id: task
+        env:
+          DISPATCH_TASK: ${{ inputs.دستور }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            TASK="$DISPATCH_TASK"
+          else
+            TASK="$ISSUE_BODY"
+            if [ -z "$TASK" ]; then
+              TASK="$ISSUE_TITLE"
+              TASK="${TASK#\[Agent\] }"
+            fi
+          fi
+          if [ -z "$(printf '%s' "$TASK" | tr -d '[:space:]')" ]; then
+            echo "دستور خالی است." >&2
+            exit 1
+          fi
+          {
+            echo 'task<<EOF'
+            printf '%s\n' "$TASK"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+          echo "دستور دریافت شد:"
+          printf '%s\n' "$TASK"
+
+      - name: تولید Plan واقعی با ChatGPT
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          AGENT_TASK: ${{ steps.task.outputs.task }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "Secret به نام OPENAI_API_KEY پیدا نشد." >&2
+            exit 1
+          fi
+          python agent/planner.py
+
       - name: اجرای برنامه تولیدشده توسط ChatGPT
         run: python agent/executor.py
 
@@ -46,7 +90,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .
-          git diff --cached --quiet || git commit -m "🤖 اجرای تغییرات تولیدشده توسط ChatGPT"
+          git diff --cached --quiet || git commit -m "🤖 اجرای دستور تولیدشده توسط ChatGPT"
           git push
 
       - name: اعتبارسنجی و آماده‌سازی خروجی سایت
@@ -77,7 +121,6 @@ jobs:
           print("\n".join(names))
           PY
 
-      # GitHub Artifact خودش یک ZIP می‌سازد؛ بنابراین فایل site.zip را هرگز داخل Artifact قرار نمی‌دهیم.
       - name: تحویل خروجی سایت به‌صورت فایل‌های واقعی
         if: always() && hashFiles('site/**') != ''
         uses: actions/upload-artifact@v5
