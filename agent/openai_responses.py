@@ -20,6 +20,8 @@ SYSTEM_PROMPT = """
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 GITHUB_MODELS_URL = "https://models.github.ai/inference/chat/completions"
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEEPSEEK_MODEL = "deepseek-chat"
 
 
 def _request_openai(api_key: str, model: str, prompt: str) -> dict:
@@ -114,6 +116,32 @@ def _describe_http_error(provider: str, exc: urllib.error.HTTPError) -> str:
     return f"{provider} | HTTP {exc.code} | {body[:2000]}"
 
 
+def _request_fallback(prompt: str, errors: list[str]) -> dict | None:
+    """Provider جایگزین OpenAI-compatible؛ پیش‌فرض آن DeepSeek است."""
+    fallback_key = os.environ.get("AI_FALLBACK_API_KEY", "")
+    fallback_url = os.environ.get("AI_FALLBACK_BASE_URL", DEEPSEEK_BASE_URL)
+    fallback_model = os.environ.get("AI_FALLBACK_MODEL", DEEPSEEK_MODEL)
+
+    if not fallback_key:
+        errors.append("DeepSeek | AI_FALLBACK_API_KEY تنظیم نشده است")
+        return None
+
+    for attempt in range(2):
+        try:
+            data = _request_openai_compatible(fallback_url, fallback_key, fallback_model, prompt)
+            return _parse_model_result(_extract_text(data))
+        except urllib.error.HTTPError as exc:
+            errors.append(_describe_http_error(f"DeepSeek/{fallback_model}", exc))
+            if _retryable(exc.code) and attempt == 0:
+                time.sleep(3)
+                continue
+            break
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            errors.append(f"DeepSeek/{fallback_model} | {type(exc).__name__} | {exc}")
+            break
+    return None
+
+
 def ask_model(task: str, context: str, feedback: str = "") -> dict:
     prompt = f"""
 درخواست کاربر:
@@ -130,7 +158,12 @@ def ask_model(task: str, context: str, feedback: str = "") -> dict:
 
     errors = []
 
-    # مدل اصلی: OpenAI API با کلید ذخیره‌شده در GitHub Secret.
+    # Provider اصلی پروژه: DeepSeek با Secret موجود در AI_FALLBACK_API_KEY.
+    deepseek_result = _request_fallback(prompt, errors)
+    if deepseek_result is not None:
+        return deepseek_result
+
+    # در صورت خطای DeepSeek، OpenAI API را به عنوان پشتیبان نگه می‌داریم.
     openai_key = os.environ.get("OPENAI_API_KEY", "")
     if openai_key:
         model = os.getenv("OPENAI_MODEL", "gpt-5.6")
@@ -150,7 +183,7 @@ def ask_model(task: str, context: str, feedback: str = "") -> dict:
     else:
         errors.append("OpenAI | OPENAI_API_KEY تنظیم نشده است")
 
-    # Failover اول: GitHub Models.
+    # Failover دوم: GitHub Models.
     github_token = os.environ.get("GITHUB_TOKEN", "")
     if github_token:
         for model in _github_models(os.getenv("GITHUB_MODELS_MODEL", "openai/gpt-4.1")):
@@ -169,26 +202,5 @@ def ask_model(task: str, context: str, feedback: str = "") -> dict:
                     break
     else:
         errors.append("GitHub Models | GITHUB_TOKEN تنظیم نشده است")
-
-    # Failover دوم: Provider سازگار با OpenAI، در صورت تنظیم Secretها.
-    fallback_key = os.environ.get("AI_FALLBACK_API_KEY", "")
-    fallback_url = os.environ.get("AI_FALLBACK_BASE_URL", "")
-    fallback_model = os.environ.get("AI_FALLBACK_MODEL", "")
-    if fallback_key and fallback_url and fallback_model:
-        for attempt in range(2):
-            try:
-                data = _request_openai_compatible(fallback_url, fallback_key, fallback_model, prompt)
-                return _parse_model_result(_extract_text(data))
-            except urllib.error.HTTPError as exc:
-                errors.append(_describe_http_error(f"Fallback/{fallback_model}", exc))
-                if _retryable(exc.code) and attempt == 0:
-                    time.sleep(3)
-                    continue
-                break
-            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-                errors.append(f"Fallback/{fallback_model} | {type(exc).__name__} | {exc}")
-                break
-    else:
-        errors.append("Fallback | Secretهای Provider جایگزین کامل تنظیم نشده‌اند")
 
     raise RuntimeError("تمام Providerها شکست خوردند:\n" + "\n".join(f"- {error}" for error in errors))
