@@ -37,8 +37,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: دریافت نسخه پایدار Security Agent
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: git clone --depth 1 --branch security-agent-release https://github.com/mydsoftware/AI-Agent-Manager.git ai-agent-manager
+        run: git clone --depth 1 --branch security-agent-release "https://x-access-token:${GH_TOKEN}@github.com/mydsoftware/AI-Agent-Manager.git" ai-agent-manager
       - name: بررسی ساختار Python
         run: python -m py_compile agent/security_gate.py
       - name: آزمون Security Gate
@@ -71,8 +73,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
       - name: دریافت نسخه پایدار Security Agent
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: git clone --depth 1 --branch security-agent-release https://github.com/mydsoftware/AI-Agent-Manager.git ai-agent-manager
+        run: git clone --depth 1 --branch security-agent-release "https://x-access-token:${GH_TOKEN}@github.com/mydsoftware/AI-Agent-Manager.git" ai-agent-manager
       - name: آماده‌سازی پایتون
         uses: actions/setup-python@v6
         with:
