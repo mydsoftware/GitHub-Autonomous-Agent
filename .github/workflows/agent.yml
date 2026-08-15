@@ -7,16 +7,27 @@ on:
         description: "دستور فارسی برای عامل"
         required: true
         type: string
+  repository_dispatch:
+    types: [agent_task]
   issues:
     types: [opened]
 
 permissions:
   contents: write
   issues: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: عامل-خودمختار
+  cancel-in-progress: false
 
 jobs:
   agent:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.issue.labels.*.name, 'agent')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'repository_dispatch' ||
+      (github.event_name == 'issues' && startsWith(github.event.issue.title, '[Agent]'))
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -34,17 +45,19 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: تعیین دستور
-        id: task
         env:
           WORKFLOW_TASK: ${{ inputs.task }}
-          ISSUE_TASK: ${{ github.event.issue.title }}
+          DISPATCH_TASK: ${{ github.event.client_payload.task }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
           if [ -n "$WORKFLOW_TASK" ]; then
             printf '%s' "$WORKFLOW_TASK" > agent-task.txt
+          elif [ -n "$DISPATCH_TASK" ]; then
+            printf '%s' "$DISPATCH_TASK" > agent-task.txt
           else
             {
-              printf '%s\n\n' "$ISSUE_TASK"
+              printf '%s\n\n' "$ISSUE_TITLE"
               printf '%s' "$ISSUE_BODY"
             } > agent-task.txt
           fi
@@ -52,13 +65,10 @@ jobs:
       - name: اجرای حلقه مهندسی
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          AGENT_TASK: ${{ inputs.task }}
           MAX_ITERATIONS: "8"
           AI_MODEL: "gpt-5.6"
         run: |
-          if [ -z "$AGENT_TASK" ]; then
-            export AGENT_TASK="$(cat agent-task.txt)"
-          fi
+          export AGENT_TASK="$(cat agent-task.txt)"
           python agent/runner.py
 
       - name: ثبت تغییرات
@@ -69,6 +79,21 @@ jobs:
           git add .
           git diff --cached --quiet || git commit -m "🤖 اجرای خودکار عامل"
           git push
+
+      - name: آماده‌سازی انتشار سایت
+        if: success() && hashFiles('site/**') != ''
+        uses: actions/configure-pages@v5
+
+      - name: بسته‌بندی سایت
+        if: success() && hashFiles('site/**') != ''
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: انتشار سایت
+        if: success() && hashFiles('site/**') != ''
+        id: deployment
+        uses: actions/deploy-pages@v4
 
       - name: بارگذاری گزارش
         if: always()
@@ -83,7 +108,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          SITE_URL: ${{ steps.deployment.outputs.page_url }}
         run: |
           if [ -f agent-result.json ]; then
-            gh issue comment "$ISSUE_NUMBER" --body "## نتیجه اجرای عامل\n\n\`\`\`json\n$(cat agent-result.json)\n\`\`\`"
+            {
+              echo "## نتیجه اجرای عامل"
+              echo
+              cat agent-result.json
+              if [ -n "$SITE_URL" ]; then
+                echo
+                echo "### لینک خروجی سایت"
+                echo "$SITE_URL"
+              fi
+            } > agent-comment.md
+            gh issue comment "$ISSUE_NUMBER" --body-file agent-comment.md
           fi
