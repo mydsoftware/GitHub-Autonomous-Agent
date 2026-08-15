@@ -13,7 +13,6 @@ on:
 permissions:
   contents: write
   issues: write
-  models: read
 
 jobs:
   agent:
@@ -52,10 +51,10 @@ jobs:
 
       - name: اجرای حلقه مهندسی
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           AGENT_TASK: ${{ inputs.task }}
           MAX_ITERATIONS: "8"
-          AI_MODEL: "openai/gpt-4.1"
+          AI_MODEL: "gpt-5-mini"
         run: |
           if [ -z "$AGENT_TASK" ]; then
             export AGENT_TASK="$(cat agent-task.txt)"
