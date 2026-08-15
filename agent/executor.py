@@ -1,6 +1,5 @@
 import json
 import pathlib
-import shlex
 import subprocess
 import sys
 import traceback
@@ -38,15 +37,7 @@ def run_command(root: pathlib.Path, command: str) -> tuple[int, str]:
     if not command.startswith(ALLOWED_COMMAND_PREFIXES):
         return 2, f"دستور غیرمجاز: {command}"
     try:
-        result = subprocess.run(
-            command,
-            cwd=root,
-            shell=True,
-            text=True,
-            capture_output=True,
-            timeout=600,
-            check=False,
-        )
+        result = subprocess.run(command, cwd=root, shell=True, text=True, capture_output=True, timeout=600, check=False)
         output = (result.stdout + "\n" + result.stderr).strip()
         return result.returncode, output[-MAX_OUTPUT:]
     except subprocess.TimeoutExpired as exc:
@@ -57,18 +48,31 @@ def run_command(root: pathlib.Path, command: str) -> tuple[int, str]:
 
 
 def load_plan(path: pathlib.Path) -> dict:
+    """برنامه را می‌خواند و قبل از اجرا ساختار آن را سخت‌گیرانه اعتبارسنجی می‌کند."""
     if not path.exists():
         raise FileNotFoundError(f"برنامه ChatGPT پیدا نشد: {path}")
+    raw = path.read_text(encoding="utf-8")
+    if not raw.strip():
+        raise ValueError("فایل برنامه ChatGPT خالی است.")
     try:
-        plan = json.loads(path.read_text(encoding="utf-8"))
+        plan = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"JSON برنامه ChatGPT نامعتبر است: خط {exc.lineno} ستون {exc.colno}: {exc.msg}") from exc
+        snippet = raw[max(0, exc.pos - 100):min(len(raw), exc.pos + 100)].replace("\n", "\\n")
+        raise ValueError(f"JSON برنامه ChatGPT نامعتبر است: خط {exc.lineno} ستون {exc.colno}: {exc.msg}; اطراف خطا: {snippet}") from exc
     if not isinstance(plan, dict):
         raise ValueError("برنامه ChatGPT باید یک شیء JSON باشد.")
-    if not isinstance(plan.get("files", []), list):
+    files = plan.get("files", [])
+    commands = plan.get("commands", [])
+    if not isinstance(files, list):
         raise ValueError("فیلد files باید آرایه باشد.")
-    if not isinstance(plan.get("commands", []), list):
+    if not isinstance(commands, list):
         raise ValueError("فیلد commands باید آرایه باشد.")
+    for index, item in enumerate(files):
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str) or not isinstance(item.get("content", ""), str):
+            raise ValueError(f"فایل شماره {index + 1} ساختار معتبری ندارد.")
+    for index, command in enumerate(commands):
+        if not isinstance(command, str):
+            raise ValueError(f"دستور شماره {index + 1} باید رشته باشد.")
     return plan
 
 
@@ -77,38 +81,27 @@ def main() -> int:
     plan_path = root / "agent" / "chatgpt_plan.json"
     result_path = root / "agent-result.json"
     result = {"success": False, "summary": "", "tests": [], "source": "ChatGPT", "error": None}
-
     try:
         plan = load_plan(plan_path)
         result["summary"] = plan.get("summary", "")
         files = plan.get("files", [])
         commands = plan.get("commands", [])[:MAX_COMMANDS]
-
         if not files and not commands and not plan.get("done", False):
-            raise ValueError(
-                "برنامه ChatGPT خالی است. ابتدا ChatGPT باید files/commands را تولید کند و سپس Executor اجرا شود."
-            )
-
-        applied = apply_files(root, files)
-        result["files_applied"] = applied
-
+            raise ValueError("برنامه ChatGPT خالی است. ابتدا باید files یا commands تولید شوند.")
+        result["files_applied"] = apply_files(root, files)
         for command in commands:
-            code, output = run_command(root, str(command))
-            test = {"command": command, "code": code, "output": output}
-            result["tests"].append(test)
+            code, output = run_command(root, command)
+            result["tests"].append({"command": command, "code": code, "output": output})
             print(f"$ {command}\n{output}", flush=True)
             if code != 0:
                 break
-
         result["success"] = not any(item["code"] != 0 for item in result["tests"]) and bool(plan.get("done", False))
         if not result["success"]:
             result["error"] = "برنامه کامل نشده یا یکی از تست‌ها شکست خورده است."
-
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
         print("خطای Executor:", result["error"], file=sys.stderr)
         traceback.print_exc()
-
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print("گزارش Executor:")
     print(json.dumps(result, ensure_ascii=False, indent=2))
