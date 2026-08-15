@@ -24,7 +24,7 @@
 
 ## موتور هوش مصنوعی
 
-عامل در GitHub Actions از **GitHub Models** برای استنتاج استفاده می‌کند و احراز هویت مدل با `GITHUB_TOKEN` انجام می‌شود. GitHub مستند کرده است که GitHub Models مستقیماً در GitHub Actions قابل استفاده است و Workflow باید مجوز `models: read` داشته باشد. citeturn1search2
+عامل در GitHub Actions از **GitHub Models** برای استنتاج استفاده می‌کند و احراز هویت مدل با `GITHUB_TOKEN` انجام می‌شود.
 
 مدل پیش‌فرض فعلی:
 
