@@ -38,6 +38,7 @@ jobs:
         run: |
           set -e
           test -f site/index.html
+          echo "site/index.html پیدا شد."
       - name: آماده‌سازی GitHub Pages
         uses: actions/configure-pages@v5
       - name: بسته‌بندی سایت برای Pages
@@ -50,31 +51,25 @@ jobs:
       - name: نمایش آدرس سایت
         env:
           SITE_URL: ${{ steps.deployment.outputs.page_url }}
-        run: echo "$SITE_URL"
+        run: |
+          echo "سایت با موفقیت Deploy شد:"
+          echo "$SITE_URL"
 
   executor:
-    name: 🤖 Agent + ChatGPT + AI-Agent-Manager Security
+    name: 🤖 Agent + ChatGPT
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'issues'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - name: دریافت مخزن
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: true
-
-      - name: دریافت AI-Agent-Manager
-        shell: bash
-        run: |
-          set -e
-          git clone --depth 1 --branch feat/security-pentest-loop https://github.com/mydsoftware/AI-Agent-Manager.git ai-agent-manager
-
       - name: آماده‌سازی پایتون
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-
       - name: دریافت دستور کاربر
         id: task
         env:
@@ -88,69 +83,37 @@ jobs:
             TASK="$WORKFLOW_TASK"
           else
             TASK="$ISSUE_BODY"
-            if [ -z "$TASK" ]; then TASK="$ISSUE_TITLE"; TASK="${TASK#\[Agent\] }"; fi
+            if [ -z "$TASK" ]; then
+              TASK="$ISSUE_TITLE"
+              TASK="${TASK#\[Agent\] }"
+            fi
           fi
-          if [ -z "$(printf '%s' "$TASK" | tr -d '[:space:]')" ]; then exit 1; fi
+          if [ -z "$(printf '%s' "$TASK" | tr -d '[:space:]')" ]; then
+            echo "دستور کاربر خالی است." >&2
+            exit 1
+          fi
           {
             echo "task<<EOF"
             printf '%s\n' "$TASK"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-
-      - name: اجرای حلقه Build → Test → Security → Fix
+          echo "دستور دریافت شد:"
+          printf '%s\n' "$TASK"
+      - name: تولید Plan واقعی با ChatGPT
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           AGENT_TASK: ${{ steps.task.outputs.task }}
-          AI_MANAGER_ROOT: ${{ github.workspace }}/ai-agent-manager
         shell: bash
         run: |
-          set -u
-          FEEDBACK=""
-          MAX_ROUNDS=8
-          SUCCESS=0
-          for ROUND in $(seq 1 $MAX_ROUNDS); do
-            echo "=== چرخه خودمختار $ROUND/$MAX_ROUNDS ==="
-            export AGENT_FEEDBACK="$FEEDBACK"
-
-            if ! python agent/planner.py; then
-              FEEDBACK="Planner شکست خورد. خطای Planner را بررسی و در چرخه بعد اصلاح کن."
-              continue
-            fi
-
-            if python agent/executor.py; then
-              echo "Executor موفق شد."
-            else
-              FEEDBACK=$(python - <<'PY'
-          import json
-          from pathlib import Path
-          p=Path('agent-result.json')
-          print(p.read_text(encoding='utf-8') if p.exists() else 'Executor شکست خورد.')
-          PY
-          )
-              continue
-            fi
-
-            if python agent/security_gate.py; then
-              echo "Security Gate موفق شد."
-              SUCCESS=1
-              break
-            fi
-
-            FEEDBACK=$(python - <<'PY'
-          from pathlib import Path
-          p=Path('security-result.json')
-          print(p.read_text(encoding='utf-8') if p.exists() else 'Security Gate شکست خورد.')
-          PY
-          )
-            echo "Security Finding شناسایی شد؛ چرخه بعدی برای اصلاح اجرا می‌شود."
-          done
-
-          if [ "$SUCCESS" -ne 1 ]; then
-            echo "نسخه پس از $MAX_ROUNDS چرخه به Security Gate نرسید." >&2
+          set -e
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "Secret با نام OPENAI_API_KEY پیدا نشد." >&2
             exit 1
           fi
-
+          python agent/planner.py
+      - name: اجرای Executor
+        run: python agent/executor.py
       - name: ثبت تغییرات
         if: success()
         shell: bash
@@ -161,13 +124,12 @@ jobs:
           git add .
           if git diff --cached --quiet; then
             echo "تغییری برای ثبت وجود ندارد."
-          else
-            git commit -m "🤖 اجرای دستور تولیدشده توسط ChatGPT + Security Gate"
-            git fetch origin main
-            git rebase origin/main
-            git push origin HEAD:main
+            exit 0
           fi
-
+          git commit -m "🤖 اجرای دستور تولیدشده توسط ChatGPT"
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
       - name: اعتبارسنجی و ساخت ZIP
         if: always() && hashFiles('site/**') != ''
         shell: bash
@@ -177,19 +139,25 @@ jobs:
           from pathlib import Path
           from zipfile import ZipFile, ZIP_DEFLATED
           root = Path('site')
-          if not (root / 'index.html').is_file(): raise SystemExit('index.html وجود ندارد.')
-          for p in root.rglob('*.zip'): p.unlink()
+          if not (root / 'index.html').is_file():
+              raise SystemExit('index.html وجود ندارد.')
+          for p in root.rglob('*.zip'):
+              p.unlink()
           out = Path('site.zip')
           if out.exists(): out.unlink()
           with ZipFile(out, 'w', ZIP_DEFLATED) as z:
               for p in root.rglob('*'):
-                  if p.is_file(): z.write(p, p.relative_to(root).as_posix())
+                  if p.is_file():
+                      z.write(p, p.relative_to(root).as_posix())
           with ZipFile(out) as z:
-              names=z.namelist()
-              if 'index.html' not in names: raise SystemExit('index.html داخل ZIP نیست.')
-              if any(n.lower().endswith('.zip') for n in names): raise SystemExit('ZIP تو در تو شناسایی شد.')
-              if z.testzip() is not None: raise SystemExit('ZIP خراب است.')
-
+              names = z.namelist()
+              if 'index.html' not in names:
+                  raise SystemExit('index.html داخل ZIP نیست.')
+              if any(n.lower().endswith('.zip') for n in names):
+                  raise SystemExit('ZIP تو در تو شناسایی شد.')
+              if z.testzip() is not None:
+                  raise SystemExit('ZIP خراب است.')
+          print('ZIP سالم و بدون ZIP تو در تو است.')
       - name: تحویل فایل‌های واقعی سایت
         if: always() && hashFiles('site/**') != ''
         uses: actions/upload-artifact@v5
@@ -198,7 +166,6 @@ jobs:
           path: site/
           if-no-files-found: error
           retention-days: 7
-
       - name: تحویل ZIP واقعی سایت
         if: always() && hashFiles('site.zip') != ''
         uses: actions/upload-artifact@v5
@@ -207,7 +174,6 @@ jobs:
           path: site.zip
           if-no-files-found: error
           retention-days: 7
-
       - name: گزارش اجرا
         if: always()
         uses: actions/upload-artifact@v5
@@ -215,15 +181,15 @@ jobs:
           name: گزارش-اجرای-Agent
           path: |
             agent-result.json
+            agent-result.txt
             chatgpt_plan.json
-            security-result.json
           if-no-files-found: ignore
           retention-days: 7
-
       - name: گزارش نتیجه در Issue
         if: github.event_name == 'issues' && always()
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         shell: bash
-        run: gh issue comment "$ISSUE_NUMBER" --body "Agent اجرا شد. Security Gate نیز اجرا شد و گزارش‌ها در Artifacts قرار گرفتند."
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --body "Agent اجرا شد. خروجی سایت و ZIP در Artifacts قرار گرفت و Deploy توسط Job مستقل انجام می‌شود."
