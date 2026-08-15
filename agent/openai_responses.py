@@ -30,23 +30,7 @@ SYSTEM_PROMPT = """
 """.strip()
 
 
-def ask_model(task: str, context: str, feedback: str = "") -> dict:
-    """درخواست ساخت یا اصلاح پروژه را از OpenAI Responses API دریافت می‌کند."""
-    api_key = os.environ["OPENAI_API_KEY"]
-    model = os.getenv("AI_MODEL", "gpt-5.6")
-    base_url = os.getenv("AI_BASE_URL", "https://api.openai.com/v1/responses")
-    prompt = f"""
-درخواست کاربر:
-{task}
-
-ساختار فعلی پروژه:
-{context}
-
-بازخورد آخرین تست:
-{feedback or 'هنوز تستی انجام نشده است.'}
-
-بر اساس این اطلاعات، فایل‌های لازم را تولید یا اصلاح کن.
-""".strip()
+def _request(base_url: str, api_key: str, model: str, prompt: str) -> dict:
     payload = json.dumps({
         "model": model,
         "instructions": SYSTEM_PROMPT,
@@ -63,22 +47,64 @@ def ask_model(task: str, context: str, feedback: str = "") -> dict:
         },
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=300) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"خطای API مدل ({exc.code}): {body[:2000]}") from exc
+    with urllib.request.urlopen(request, timeout=300) as response:
+        return json.loads(response.read().decode("utf-8"))
 
-    text = data.get("output_text", "").strip()
-    if not text:
-        for item in data.get("output", []):
-            for content in item.get("content", []):
-                if content.get("type") == "output_text":
-                    text += content.get("text", "")
-        text = text.strip()
-    if not text:
-        raise RuntimeError("مدل پاسخ متنی قابل استفاده‌ای برنگرداند.")
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    return json.loads(text)
+
+def ask_model(task: str, context: str, feedback: str = "") -> dict:
+    """درخواست مدل را می‌فرستد و در صورت سهمیه ناکافی مسیر جایگزین را امتحان می‌کند."""
+    prompt = f"""
+درخواست کاربر:
+{task}
+
+ساختار فعلی پروژه:
+{context}
+
+بازخورد آخرین تست:
+{feedback or 'هنوز تستی انجام نشده است.'}
+
+بر اساس این اطلاعات، فایل‌های لازم را تولید یا اصلاح کن.
+""".strip()
+
+    providers = [
+        (
+            os.environ.get("OPENAI_API_KEY", ""),
+            os.getenv("AI_BASE_URL", "https://api.openai.com/v1/responses"),
+            os.getenv("AI_MODEL", "gpt-5.6"),
+        ),
+        (
+            os.environ.get("AI_FALLBACK_API_KEY", ""),
+            os.getenv("AI_FALLBACK_BASE_URL", ""),
+            os.getenv("AI_FALLBACK_MODEL", ""),
+        ),
+    ]
+
+    last_error = None
+    for index, (api_key, base_url, model) in enumerate(providers):
+        if not api_key or not base_url or not model:
+            continue
+        try:
+            data = _request(base_url, api_key, model, prompt)
+            text = data.get("output_text", "").strip()
+            if not text:
+                for item in data.get("output", []):
+                    for content in item.get("content", []):
+                        if content.get("type") == "output_text":
+                            text += content.get("text", "")
+                text = text.strip()
+            if not text:
+                raise RuntimeError("مدل پاسخ متنی قابل استفاده‌ای برنگرداند.")
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            return json.loads(text)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            last_error = RuntimeError(f"خطای API مدل ({exc.code}): {body[:2000]}")
+            if exc.code not in (429, 500, 502, 503, 504) or index == len(providers) - 1:
+                raise last_error from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            last_error = RuntimeError(f"خطای ارتباط یا پاسخ مدل: {exc}")
+            if index == len(providers) - 1:
+                raise last_error from exc
+
+    raise last_error or RuntimeError("هیچ Provider فعالی برای مدل تنظیم نشده است.")
