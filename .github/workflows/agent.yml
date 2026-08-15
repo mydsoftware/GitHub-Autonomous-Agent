@@ -7,9 +7,13 @@ on:
         description: "دستور کامل کاربر برای Agent"
         required: true
         type: string
-
   issues:
     types: [opened]
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/agent.yml"
 
 permissions:
   contents: write
@@ -22,26 +26,59 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # این Job کاملاً مستقل از ChatGPT است و هر زمان سایت در site/ وجود داشته باشد آن را Deploy می‌کند.
+  deploy:
+    name: 🚀 Deploy مستقیم سایت
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: دریافت مخزن
+        uses: actions/checkout@v6
+
+      - name: بررسی سایت
+        shell: bash
+        run: |
+          set -e
+          test -f site/index.html
+          echo "site/index.html پیدا شد."
+
+      - name: آماده‌سازی GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: بسته‌بندی سایت برای Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: انتشار سایت
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: نمایش آدرس سایت
+        env:
+          SITE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          echo "سایت با موفقیت Deploy شد:"
+          echo "$SITE_URL"
+
+  # این Job فقط برای ساخت و ویرایش سایت توسط ChatGPT است.
   executor:
+    name: 🤖 Agent + ChatGPT
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'issues'
     runs-on: ubuntu-latest
     timeout-minutes: 60
-
     steps:
-
-      # دریافت آخرین نسخه مخزن
       - name: دریافت مخزن
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: true
 
-      # آماده‌سازی Python
       - name: آماده‌سازی پایتون
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      # دریافت دستور واقعی کاربر
       - name: دریافت دستور کاربر
         id: task
         env:
@@ -51,33 +88,27 @@ jobs:
         shell: bash
         run: |
           set -e
-
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             TASK="$WORKFLOW_TASK"
           else
             TASK="$ISSUE_BODY"
-
             if [ -z "$TASK" ]; then
               TASK="$ISSUE_TITLE"
               TASK="${TASK#\[Agent\] }"
             fi
           fi
-
           if [ -z "$(printf '%s' "$TASK" | tr -d '[:space:]')" ]; then
             echo "دستور کاربر خالی است." >&2
             exit 1
           fi
-
           {
             echo "task<<EOF"
             printf '%s\n' "$TASK"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-
           echo "دستور دریافت شد:"
           printf '%s\n' "$TASK"
 
-      # تولید برنامه واقعی توسط ChatGPT
       - name: تولید Plan واقعی با ChatGPT
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -86,132 +117,61 @@ jobs:
         shell: bash
         run: |
           set -e
-
           if [ -z "$OPENAI_API_KEY" ]; then
             echo "Secret با نام OPENAI_API_KEY پیدا نشد." >&2
             exit 1
           fi
-
           python agent/planner.py
 
-      # اجرای برنامه تولیدشده توسط ChatGPT
       - name: اجرای Executor
-        shell: bash
-        run: |
-          set -e
-          python agent/executor.py
+        run: python agent/executor.py
 
-      # ثبت تغییرات تولیدشده توسط Agent
       - name: ثبت تغییرات
         if: success()
         shell: bash
         run: |
           set -e
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           git add .
-
           if git diff --cached --quiet; then
             echo "تغییری برای ثبت وجود ندارد."
             exit 0
           fi
-
           git commit -m "🤖 اجرای دستور تولیدشده توسط ChatGPT"
-
-          echo "دریافت آخرین نسخه main..."
           git fetch origin main
-
-          echo "هماهنگ‌سازی با آخرین تغییرات..."
           git rebase origin/main
-
-          echo "ارسال تغییرات..."
           git push origin HEAD:main
 
-      # بررسی سایت و ساخت ZIP واقعی
-      - name: اعتبارسنجی سایت و ساخت ZIP
+      - name: اعتبارسنجی و ساخت ZIP
         if: always() && hashFiles('site/**') != ''
         shell: bash
         run: |
           set -e
-
           python - <<'PY'
           from pathlib import Path
           from zipfile import ZipFile, ZIP_DEFLATED
+          root = Path('site')
+          if not (root / 'index.html').is_file():
+              raise SystemExit('index.html وجود ندارد.')
+          for p in root.rglob('*.zip'):
+              p.unlink()
+          out = Path('site.zip')
+          if out.exists(): out.unlink()
+          with ZipFile(out, 'w', ZIP_DEFLATED) as z:
+              for p in root.rglob('*'):
+                  if p.is_file():
+                      z.write(p, p.relative_to(root).as_posix())
+          with ZipFile(out) as z:
+              names = z.namelist()
+              if 'index.html' not in names:
+                  raise SystemExit('index.html داخل ZIP نیست.')
+              if any(n.lower().endswith('.zip') for n in names):
+                  raise SystemExit('ZIP تو در تو شناسایی شد.')
+              if z.testzip() is not None:
+                  raise SystemExit('ZIP خراب است.')
+          print('ZIP سالم و بدون ZIP تو در تو است.')
 
-          root = Path("site")
-
-          if not root.exists():
-              raise SystemExit("پوشه site وجود ندارد.")
-
-          files = [
-              p for p in root.rglob("*")
-              if p.is_file()
-          ]
-
-          if not files:
-              raise SystemExit("پوشه site خالی است.")
-
-          index = root / "index.html"
-
-          if not index.is_file():
-              raise SystemExit("فایل index.html وجود ندارد.")
-
-          # حذف ZIPهای قبلی از داخل سایت
-          for path in root.rglob("*.zip"):
-              print(f"حذف ZIP داخلی: {path}")
-              path.unlink()
-
-          # ساخت ZIP واقعی
-          output = Path("site.zip")
-
-          if output.exists():
-              output.unlink()
-
-          with ZipFile(output, "w", ZIP_DEFLATED) as archive:
-              for path in root.rglob("*"):
-                  if path.is_file():
-                      archive.write(
-                          path,
-                          path.relative_to(root).as_posix()
-                      )
-
-          # بررسی ZIP
-          with ZipFile(output, "r") as archive:
-              names = archive.namelist()
-
-              if "index.html" not in names:
-                  raise SystemExit(
-                      "index.html داخل ZIP وجود ندارد."
-                  )
-
-              nested_zips = [
-                  name for name in names
-                  if name.lower().endswith(".zip")
-              ]
-
-              if nested_zips:
-                  raise SystemExit(
-                      f"ZIP تو در تو شناسایی شد: {nested_zips}"
-                  )
-
-              broken = archive.testzip()
-
-              if broken is not None:
-                  raise SystemExit(
-                      f"ZIP خراب است: {broken}"
-                  )
-
-              print("ZIP با موفقیت اعتبارسنجی شد.")
-              print("فایل‌های داخل ZIP:")
-
-              for name in names:
-                  print(f" - {name}")
-
-          PY
-
-      # تحویل فایل‌های واقعی سایت
       - name: تحویل فایل‌های واقعی سایت
         if: always() && hashFiles('site/**') != ''
         uses: actions/upload-artifact@v5
@@ -221,7 +181,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # تحویل ZIP واقعی
       - name: تحویل ZIP واقعی سایت
         if: always() && hashFiles('site.zip') != ''
         uses: actions/upload-artifact@v5
@@ -231,54 +190,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # تلاش برای آماده‌سازی GitHub Pages
-      - name: آماده‌سازی GitHub Pages
-        if: success() && hashFiles('site/**') != ''
-        continue-on-error: true
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
-      # آماده‌سازی فایل‌های Pages
-      - name: بسته‌بندی GitHub Pages
-        if: success() && hashFiles('site/**') != ''
-        continue-on-error: true
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-
-      # انتشار سایت
-      - name: انتشار سایت در GitHub Pages
-        if: success() && hashFiles('site/**') != ''
-        id: deployment
-        continue-on-error: true
-        uses: actions/deploy-pages@v4
-
-      # ثبت نتیجه
-      - name: ثبت نتیجه اجرا
-        if: always()
-        shell: bash
-        env:
-          SITE_URL: ${{ steps.deployment.outputs.page_url }}
-        run: |
-          set -e
-
-          echo "======================================"
-          echo "نتیجه اجرای Agent"
-          echo "======================================"
-
-          if [ -n "$SITE_URL" ]; then
-            echo "سایت آنلاین شد:"
-            echo "$SITE_URL"
-          else
-            echo "GitHub Pages در دسترس نبود."
-            echo "خروجی سایت در Artifact قرار گرفت."
-          fi
-
-          echo "======================================"
-
-      # بارگذاری گزارش
-      - name: بارگذاری گزارش اجرا
+      - name: گزارش اجرا
         if: always()
         uses: actions/upload-artifact@v5
         with:
@@ -290,37 +202,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # گزارش نتیجه در Issue
       - name: گزارش نتیجه در Issue
         if: github.event_name == 'issues' && always()
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
-          SITE_URL: ${{ steps.deployment.outputs.page_url }}
         shell: bash
         run: |
-          set -e
-
-          {
-            echo "## نتیجه اجرای Agent"
-            echo
-
-            if [ -f agent-result.json ]; then
-              cat agent-result.json
-              echo
-            fi
-
-            if [ -n "$SITE_URL" ]; then
-              echo
-              echo "### سایت آنلاین"
-              echo "$SITE_URL"
-            else
-              echo
-              echo "### خروجی"
-              echo "GitHub Pages در دسترس نبود."
-              echo "فایل‌های سایت و ZIP در بخش Artifacts قرار گرفته‌اند."
-            fi
-          } > agent-comment.md
-
-          gh issue comment "$ISSUE_NUMBER" \
-            --body-file agent-comment.md
+          gh issue comment "$ISSUE_NUMBER" --body "Agent اجرا شد. خروجی سایت و ZIP در Artifacts قرار گرفت و Deploy توسط Job مستقل انجام می‌شود."
