@@ -52,6 +52,8 @@ jobs:
       - name: آماده‌سازی انتشار سایت
         if: success() && hashFiles('site/**') != ''
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: بسته‌بندی سایت
         if: success() && hashFiles('site/**') != ''
