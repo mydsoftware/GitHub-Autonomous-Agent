@@ -6,10 +6,7 @@ import traceback
 
 MAX_OUTPUT = 20_000
 MAX_COMMANDS = 8
-ALLOWED_COMMAND_PREFIXES = (
-    "python ", "python3 ", "pytest", "pip ", "pip3 ", "npm ", "npx ",
-    "pnpm ", "yarn ", "node ", "ruff ", "mypy ", "eslint ", "tsc ", "vite",
-)
+ALLOWED_COMMAND_PREFIXES = ("python ", "python3 ", "pytest", "pip ", "pip3 ", "npm ", "npx ", "pnpm ", "yarn ", "node ", "ruff ", "mypy ", "eslint ", "tsc ", "vite")
 
 
 def apply_files(root: pathlib.Path, files: list[dict]) -> int:
@@ -48,7 +45,7 @@ def run_command(root: pathlib.Path, command: str) -> tuple[int, str]:
 
 
 def load_plan(path: pathlib.Path) -> dict:
-    """برنامه را می‌خواند و قبل از اجرا ساختار آن را سخت‌گیرانه اعتبارسنجی می‌کند."""
+    """برنامه ChatGPT را می‌خواند و خطای ناشی از خط جدید خام در رشته‌های کد را نیز مدیریت می‌کند."""
     if not path.exists():
         raise FileNotFoundError(f"برنامه ChatGPT پیدا نشد: {path}")
     raw = path.read_text(encoding="utf-8")
@@ -57,8 +54,11 @@ def load_plan(path: pathlib.Path) -> dict:
     try:
         plan = json.loads(raw)
     except json.JSONDecodeError as exc:
-        snippet = raw[max(0, exc.pos - 100):min(len(raw), exc.pos + 100)].replace("\n", "\\n")
-        raise ValueError(f"JSON برنامه ChatGPT نامعتبر است: خط {exc.lineno} ستون {exc.colno}: {exc.msg}; اطراف خطا: {snippet}") from exc
+        try:
+            plan = json.loads(raw, strict=False)
+        except json.JSONDecodeError:
+            snippet = raw[max(0, exc.pos - 100):min(len(raw), exc.pos + 100)].replace("\n", "\\n")
+            raise ValueError(f"JSON برنامه ChatGPT نامعتبر است: خط {exc.lineno} ستون {exc.colno}: {exc.msg}; اطراف خطا: {snippet}") from exc
     if not isinstance(plan, dict):
         raise ValueError("برنامه ChatGPT باید یک شیء JSON باشد.")
     files = plan.get("files", [])
