@@ -16,17 +16,6 @@ SYSTEM_PROMPT = """
   "commands": ["دستورهای مجاز برای تست یا ساخت"],
   "done": true
 }
-
-قواعد:
-- فقط فایل‌های لازم را تغییر بده.
-- مسیر فایل‌ها باید نسبی و داخل مخزن باشند.
-- برای درخواست‌های ساخت سایت، یک سایت کامل و قابل اجرا بساز و فایل انتشار اصلی را در `site/index.html` قرار بده.
-- برای سایت‌های ساده از HTML/CSS/JavaScript بدون وابستگی غیرضروری استفاده کن.
-- اگر پروژه به Build نیاز دارد، فایل‌های پیکربندی و اسکریپت‌های لازم را هم ایجاد کن.
-- دستورات فقط برای نصب وابستگی، تست، lint، build یا ابزارهای توسعه باشند.
-- از دستورهای مخرب، حذف گسترده فایل‌ها، دسترسی به secrets یا تغییر تنظیمات امنیتی خودداری کن.
-- قبل از اعلام done، تست یا build مناسب را اجرا کن.
-- اگر تست شکست خورد، در دور بعد بر اساس بازخورد آن را اصلاح کن.
 """.strip()
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
@@ -54,7 +43,10 @@ def _request_openai(api_key: str, model: str, prompt: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _request_github_models(token: str, model: str, prompt: str) -> dict:
+def _request_openai_compatible(base_url: str, api_key: str, model: str, prompt: str) -> dict:
+    url = base_url.rstrip("/")
+    if not url.endswith("/chat/completions"):
+        url += "/chat/completions"
     payload = json.dumps({
         "model": model,
         "messages": [
@@ -63,13 +55,12 @@ def _request_github_models(token: str, model: str, prompt: str) -> dict:
         ],
     }).encode("utf-8")
     request = urllib.request.Request(
-        GITHUB_MODELS_URL,
+        url,
         data=payload,
         headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
+            "Accept": "application/json",
         },
         method="POST",
     )
@@ -77,8 +68,12 @@ def _request_github_models(token: str, model: str, prompt: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _request_github_models(token: str, model: str, prompt: str) -> dict:
+    return _request_openai_compatible(GITHUB_MODELS_URL, token, model, prompt)
+
+
 def _extract_text(data: dict, github_models: bool = False) -> str:
-    if github_models:
+    if github_models or "choices" in data:
         choices = data.get("choices", [])
         if choices:
             return (choices[0].get("message", {}).get("content") or "").strip()
@@ -86,11 +81,12 @@ def _extract_text(data: dict, github_models: bool = False) -> str:
     text = data.get("output_text", "").strip()
     if text:
         return text
+    parts = []
     for item in data.get("output", []):
         for content in item.get("content", []):
             if content.get("type") == "output_text":
-                text += content.get("text", "")
-    return text.strip()
+                parts.append(content.get("text", ""))
+    return "".join(parts).strip()
 
 
 def _parse_model_result(text: str) -> dict:
@@ -113,8 +109,12 @@ def _retryable(code: int) -> bool:
     return code in (408, 409, 429, 500, 502, 503, 504)
 
 
+def _describe_http_error(provider: str, exc: urllib.error.HTTPError) -> str:
+    body = exc.read().decode("utf-8", errors="replace")
+    return f"{provider} | HTTP {exc.code} | {body[:2000]}"
+
+
 def ask_model(task: str, context: str, feedback: str = "") -> dict:
-    """زنجیره مدل را اجرا می‌کند: OpenAI اصلی، سپس GitHub Models و Provider جایگزین."""
     prompt = f"""
 درخواست کاربر:
 {task}
@@ -128,7 +128,7 @@ def ask_model(task: str, context: str, feedback: str = "") -> dict:
 بر اساس این اطلاعات، فایل‌های لازم را تولید یا اصلاح کن.
 """.strip()
 
-    last_error = None
+    errors = []
 
     # مدل اصلی: OpenAI API با کلید ذخیره‌شده در GitHub Secret.
     openai_key = os.environ.get("OPENAI_API_KEY", "")
@@ -139,56 +139,56 @@ def ask_model(task: str, context: str, feedback: str = "") -> dict:
                 data = _request_openai(openai_key, model, prompt)
                 return _parse_model_result(_extract_text(data))
             except urllib.error.HTTPError as exc:
-                body = exc.read().decode("utf-8", errors="replace")
-                last_error = RuntimeError(f"خطای OpenAI ({exc.code}): {body[:2000]}")
+                errors.append(_describe_http_error(f"OpenAI/{model}", exc))
                 if _retryable(exc.code) and attempt == 0:
                     time.sleep(3)
                     continue
                 break
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-                last_error = RuntimeError(f"خطای ارتباط یا پاسخ OpenAI: {exc}")
+                errors.append(f"OpenAI/{model} | {type(exc).__name__} | {exc}")
                 break
+    else:
+        errors.append("OpenAI | OPENAI_API_KEY تنظیم نشده است")
 
     # Failover اول: GitHub Models.
     github_token = os.environ.get("GITHUB_TOKEN", "")
-    for model in _github_models(os.getenv("GITHUB_MODELS_MODEL", "openai/gpt-4.1")):
-        if not github_token:
-            break
-        for attempt in range(2):
-            try:
-                data = _request_github_models(github_token, model, prompt)
-                return _parse_model_result(_extract_text(data, github_models=True))
-            except urllib.error.HTTPError as exc:
-                body = exc.read().decode("utf-8", errors="replace")
-                last_error = RuntimeError(f"خطای GitHub Models با مدل {model} ({exc.code}): {body[:2000]}")
-                if _retryable(exc.code) and attempt == 0:
-                    time.sleep(3)
-                    continue
-                break
-            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-                last_error = RuntimeError(f"خطای ارتباط یا پاسخ GitHub Models با مدل {model}: {exc}")
-                break
+    if github_token:
+        for model in _github_models(os.getenv("GITHUB_MODELS_MODEL", "openai/gpt-4.1")):
+            for attempt in range(2):
+                try:
+                    data = _request_github_models(github_token, model, prompt)
+                    return _parse_model_result(_extract_text(data, github_models=True))
+                except urllib.error.HTTPError as exc:
+                    errors.append(_describe_http_error(f"GitHub Models/{model}", exc))
+                    if _retryable(exc.code) and attempt == 0:
+                        time.sleep(3)
+                        continue
+                    break
+                except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                    errors.append(f"GitHub Models/{model} | {type(exc).__name__} | {exc}")
+                    break
+    else:
+        errors.append("GitHub Models | GITHUB_TOKEN تنظیم نشده است")
 
-    # Failover دوم: Provider جایگزین در صورت تنظیم Secretها.
-    fallback = (
-        os.environ.get("AI_FALLBACK_API_KEY", ""),
-        os.getenv("AI_FALLBACK_BASE_URL", ""),
-        os.getenv("AI_FALLBACK_MODEL", ""),
-    )
-    if all(fallback):
+    # Failover دوم: Provider سازگار با OpenAI، در صورت تنظیم Secretها.
+    fallback_key = os.environ.get("AI_FALLBACK_API_KEY", "")
+    fallback_url = os.environ.get("AI_FALLBACK_BASE_URL", "")
+    fallback_model = os.environ.get("AI_FALLBACK_MODEL", "")
+    if fallback_key and fallback_url and fallback_model:
         for attempt in range(2):
             try:
-                data = _request_openai(fallback[1], fallback[0], fallback[2], prompt)
+                data = _request_openai_compatible(fallback_url, fallback_key, fallback_model, prompt)
                 return _parse_model_result(_extract_text(data))
             except urllib.error.HTTPError as exc:
-                body = exc.read().decode("utf-8", errors="replace")
-                last_error = RuntimeError(f"خطای Provider جایگزین ({exc.code}): {body[:2000]}")
+                errors.append(_describe_http_error(f"Fallback/{fallback_model}", exc))
                 if _retryable(exc.code) and attempt == 0:
                     time.sleep(3)
                     continue
                 break
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-                last_error = RuntimeError(f"خطای ارتباط یا پاسخ Provider جایگزین: {exc}")
+                errors.append(f"Fallback/{fallback_model} | {type(exc).__name__} | {exc}")
                 break
+    else:
+        errors.append("Fallback | Secretهای Provider جایگزین کامل تنظیم نشده‌اند")
 
-    raise last_error or RuntimeError("هیچ Provider فعالی برای مدل تنظیم نشده است.")
+    raise RuntimeError("تمام Providerها شکست خوردند:\n" + "\n".join(f"- {error}" for error in errors))
