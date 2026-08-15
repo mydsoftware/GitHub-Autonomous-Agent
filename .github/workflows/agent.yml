@@ -1,36 +1,31 @@
-name: اجرای عامل خودمختار
+name: اجرای عامل متصل به ChatGPT
 
 on:
   workflow_dispatch:
     inputs:
-      task:
-        description: "دستور فارسی برای عامل"
+      اجرا:
+        description: "اجرای برنامه‌ای که ChatGPT در chatgpt_plan.json قرار داده است"
         required: true
-        type: string
-  repository_dispatch:
-    types: [agent_task]
+        type: boolean
+        default: true
   issues:
     types: [opened]
 
 permissions:
   contents: write
   issues: write
-  models: read
   pages: write
   id-token: write
 
 concurrency:
-  group: عامل-خودمختار
+  group: عامل-متصل-به-ChatGPT
   cancel-in-progress: false
 
 jobs:
-  agent:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'repository_dispatch' ||
-      (github.event_name == 'issues' && startsWith(github.event.issue.title, '[Agent]'))
+  executor:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'issues' && startsWith(github.event.issue.title, '[Agent]'))
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 60
     steps:
       - name: دریافت مخزن
         uses: actions/checkout@v6
@@ -42,41 +37,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: نصب وابستگی‌ها
-        run: pip install -r requirements.txt
-
-      - name: تعیین دستور
-        env:
-          WORKFLOW_TASK: ${{ inputs.task }}
-          DISPATCH_TASK: ${{ github.event.client_payload.task }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
-        run: |
-          if [ -n "$WORKFLOW_TASK" ]; then
-            printf '%s' "$WORKFLOW_TASK" > agent-task.txt
-          elif [ -n "$DISPATCH_TASK" ]; then
-            printf '%s' "$DISPATCH_TASK" > agent-task.txt
-          else
-            {
-              printf '%s\n\n' "$ISSUE_TITLE"
-              printf '%s' "$ISSUE_BODY"
-            } > agent-task.txt
-          fi
-
-      - name: اجرای حلقه مهندسی
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: "gpt-5.6"
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_MODELS_MODEL: "openai/gpt-4.1"
-          GITHUB_MODELS_MODELS: "openai/gpt-4.1,openai/gpt-4o"
-          AI_FALLBACK_API_KEY: ${{ secrets.AI_FALLBACK_API_KEY }}
-          AI_FALLBACK_BASE_URL: ${{ secrets.AI_FALLBACK_BASE_URL }}
-          AI_FALLBACK_MODEL: ${{ secrets.AI_FALLBACK_MODEL }}
-          MAX_ITERATIONS: "8"
-        run: |
-          export AGENT_TASK="$(cat agent-task.txt)"
-          python agent/runner.py
+      - name: اجرای برنامه تولیدشده توسط ChatGPT
+        run: python agent/executor.py
 
       - name: ثبت تغییرات
         if: success()
@@ -84,7 +46,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .
-          git diff --cached --quiet || git commit -m "🤖 اجرای خودکار عامل"
+          git diff --cached --quiet || git commit -m "🤖 اجرای تغییرات تولیدشده توسط ChatGPT"
           git push
 
       - name: آماده‌سازی انتشار سایت
@@ -106,7 +68,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: گزارش-عامل
+          name: گزارش-اجرای-ChatGPT
           path: agent-result.json
           if-no-files-found: ignore
 
@@ -119,7 +81,7 @@ jobs:
         run: |
           if [ -f agent-result.json ]; then
             {
-              echo "## نتیجه اجرای عامل"
+              echo "## نتیجه اجرای ChatGPT"
               echo
               cat agent-result.json
               if [ -n "$SITE_URL" ]; then
