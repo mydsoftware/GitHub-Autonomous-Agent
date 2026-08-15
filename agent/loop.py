@@ -10,10 +10,7 @@ class TaskResult:
 
 
 class EngineeringLoop:
-    """Controlled plan -> implement -> test -> repair loop.
-
-    Provider-specific AI calls will be plugged into this interface in the next phase.
-    """
+    """حلقه کنترل‌شده برنامه‌ریزی، پیاده‌سازی، تست و اصلاح."""
 
     def __init__(self, max_iterations: int = 8):
         self.max_iterations = max_iterations
@@ -24,11 +21,16 @@ class EngineeringLoop:
         implement: Callable[[str], None],
         test: Callable[[], tuple[bool, str]],
     ) -> TaskResult:
+        """وظیفه را اجرا می‌کند و تا موفقیت یا رسیدن به سقف تکرار ادامه می‌دهد."""
         feedback = ""
         for iteration in range(1, self.max_iterations + 1):
-            instruction = task if not feedback else f"{task}\n\nTest feedback:\n{feedback}"
+            instruction = task if not feedback else f"{task}\n\nبازخورد تست:\n{feedback}"
             implement(instruction)
             passed, feedback = test()
             if passed:
-                return TaskResult(True, "All validation checks passed.", iteration)
-        return TaskResult(False, feedback or "Maximum engineering iterations reached.", self.max_iterations)
+                return TaskResult(True, "همه بررسی‌های اعتبارسنجی با موفقیت انجام شد.", iteration)
+        return TaskResult(
+            False,
+            feedback or "حداکثر تعداد تلاش‌های مهندسی به پایان رسید.",
+            self.max_iterations,
+        )
