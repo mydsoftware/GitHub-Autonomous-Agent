@@ -9,11 +9,6 @@ on:
         type: string
   issues:
     types: [opened]
-  push:
-    branches: [main]
-    paths:
-      - "site/**"
-      - ".github/workflows/agent.yml"
 
 permissions:
   contents: write
@@ -26,32 +21,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: 🚀 Deploy مستقیم سایت
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: دریافت مخزن
-        uses: actions/checkout@v6
-      - name: بررسی سایت
-        shell: bash
-        run: |
-          set -e
-          test -f site/index.html
-      - name: آماده‌سازی GitHub Pages
-        uses: actions/configure-pages@v5
-      - name: بسته‌بندی سایت برای Pages
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-      - name: انتشار سایت
-        id: deployment
-        uses: actions/deploy-pages@v4
-      - name: نمایش آدرس سایت
-        env:
-          SITE_URL: ${{ steps.deployment.outputs.page_url }}
-        run: echo "$SITE_URL"
-
   executor:
     name: 🤖 Agent + ChatGPT + AI-Agent-Manager Security
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'issues'
@@ -162,3 +131,29 @@ jobs:
             security-result.json
           if-no-files-found: ignore
           retention-days: 7
+
+  deploy:
+    name: 🚀 Deploy پس از Security Gate
+    needs: executor
+    if: needs.executor.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: دریافت نسخه تأییدشده
+        uses: actions/checkout@v6
+      - name: بررسی سایت
+        shell: bash
+        run: test -f site/index.html
+      - name: آماده‌سازی GitHub Pages
+        uses: actions/configure-pages@v5
+      - name: بسته‌بندی سایت برای Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - name: انتشار سایت
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: نمایش آدرس سایت
+        env:
+          SITE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: echo "$SITE_URL"
