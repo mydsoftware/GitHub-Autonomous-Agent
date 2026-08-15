@@ -49,29 +49,58 @@ jobs:
           git diff --cached --quiet || git commit -m "🤖 اجرای تغییرات تولیدشده توسط ChatGPT"
           git push
 
-      - name: آماده‌سازی انتشار سایت
+      - name: آماده‌سازی بسته سایت
+        if: success() && hashFiles('site/**') != ''
+        run: |
+          rm -f site.zip
+          cd site
+          zip -r ../site.zip .
+
+      - name: تحویل ZIP سایت
+        if: always() && hashFiles('site.zip') != ''
+        uses: actions/upload-artifact@v5
+        with:
+          name: سایت-ساخته‌شده-توسط-ChatGPT
+          path: site.zip
+          if-no-files-found: error
+
+      - name: آماده‌سازی انتشار GitHub Pages
         if: success() && hashFiles('site/**') != ''
         uses: actions/configure-pages@v5
+        continue-on-error: true
         with:
           enablement: true
 
-      - name: بسته‌بندی سایت
+      - name: بسته‌بندی برای GitHub Pages
         if: success() && hashFiles('site/**') != ''
         uses: actions/upload-pages-artifact@v3
+        continue-on-error: true
         with:
           path: site
 
-      - name: انتشار سایت
+      - name: انتشار سایت در GitHub Pages
         if: success() && hashFiles('site/**') != ''
         id: deployment
         uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      - name: ثبت نتیجه انتشار
+        if: always() && hashFiles('site/**') != ''
+        run: |
+          if [ -n "${{ steps.deployment.outputs.page_url }}" ]; then
+            echo "لینک سایت: ${{ steps.deployment.outputs.page_url }}" >> agent-result.txt
+          else
+            echo "GitHub Pages در دسترس نبود؛ فایل ZIP سایت در Artifact قرار گرفت." >> agent-result.txt
+          fi
 
       - name: بارگذاری گزارش
         if: always()
         uses: actions/upload-artifact@v5
         with:
           name: گزارش-اجرای-ChatGPT
-          path: agent-result.json
+          path: |
+            agent-result.json
+            agent-result.txt
           if-no-files-found: ignore
 
       - name: گزارش نتیجه در Issue
@@ -86,10 +115,13 @@ jobs:
               echo "## نتیجه اجرای ChatGPT"
               echo
               cat agent-result.json
+              echo
               if [ -n "$SITE_URL" ]; then
-                echo
                 echo "### لینک خروجی سایت"
                 echo "$SITE_URL"
+              else
+                echo "### خروجی"
+                echo "GitHub Pages در دسترس نبود؛ فایل ZIP سایت در Artifact این اجرای Workflow قرار گرفته است."
               fi
             } > agent-comment.md
             gh issue comment "$ISSUE_NUMBER" --body-file agent-comment.md
