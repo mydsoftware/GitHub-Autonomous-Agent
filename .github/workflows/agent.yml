@@ -67,6 +67,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_MODELS_MODEL: "openai/gpt-4.1"
+          GITHUB_MODELS_MODELS: "openai/gpt-4.1,openai/gpt-4o"
+          AI_FALLBACK_API_KEY: ${{ secrets.AI_FALLBACK_API_KEY }}
+          AI_FALLBACK_BASE_URL: ${{ secrets.AI_FALLBACK_BASE_URL }}
+          AI_FALLBACK_MODEL: ${{ secrets.AI_FALLBACK_MODEL }}
           MAX_ITERATIONS: "8"
         run: |
           export AGENT_TASK="$(cat agent-task.txt)"
