@@ -36,8 +36,12 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: دریافت AI-Agent-Manager
-        run: git clone --depth 1 --branch feat/security-pentest-loop https://github.com/mydsoftware/AI-Agent-Manager.git ai-agent-manager
+      - name: دریافت نسخه پایدار Security Agent
+        shell: bash
+        run: |
+          git clone https://github.com/mydsoftware/AI-Agent-Manager.git ai-agent-manager
+          cd ai-agent-manager
+          git checkout c55025530e32808bc31d2171d07fafb9e7debaf
       - name: بررسی ساختار Python
         run: python -m py_compile agent/security_gate.py
       - name: آزمون Security Gate
@@ -69,9 +73,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
-      - name: دریافت AI-Agent-Manager
+      - name: دریافت نسخه پایدار Security Agent
         shell: bash
-        run: git clone --depth 1 --branch feat/security-pentest-loop https://github.com/mydsoftware/AI-Agent-Manager.git ai-agent-manager
+        run: |
+          git clone https://github.com/mydsoftware/AI-Agent-Manager.git ai-agent-manager
+          cd ai-agent-manager
+          git checkout c55025530e32808bc31d2171d07fafb9e7debaf
       - name: آماده‌سازی پایتون
         uses: actions/setup-python@v6
         with:
