@@ -9,6 +9,10 @@ on:
         type: string
   issues:
     types: [opened]
+  pull_request:
+    paths:
+      - "agent/**"
+      - ".github/workflows/agent.yml"
 
 permissions:
   contents: write
@@ -21,6 +25,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  integration:
+    name: 🧪 تست اتصال Security Agent
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: دریافت مخزن
+        uses: actions/checkout@v6
+      - name: آماده‌سازی پایتون
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: دریافت AI-Agent-Manager
+        run: git clone --depth 1 --branch feat/security-pentest-loop https://github.com/mydsoftware/AI-Agent-Manager.git ai-agent-manager
+      - name: بررسی ساختار Python
+        run: python -m py_compile agent/security_gate.py
+      - name: آزمون Security Gate
+        env:
+          AI_MANAGER_ROOT: ${{ github.workspace }}/ai-agent-manager
+        run: |
+          mkdir -p site
+          printf '%s\n' '<script>eval("x")</script>' > site/index.html
+          if python agent/security_gate.py; then
+            echo "Security Gate باید Finding را Block کند." >&2
+            exit 1
+          fi
+          python - <<'PY'
+          import json
+          data=json.load(open('security-result.json', encoding='utf-8'))
+          assert data['passed'] is False
+          assert any(f['severity'] == 'high' for f in data['findings'])
+          print('Security Gate integration test passed.')
+          PY
+
   executor:
     name: 🤖 Agent + ChatGPT + AI-Agent-Manager Security
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'issues'
@@ -86,40 +123,6 @@ jobs:
           git fetch origin main
           git rebase origin/main
           git push origin HEAD:main
-      - name: اعتبارسنجی و ساخت ZIP
-        if: always() && hashFiles('site/**') != ''
-        shell: bash
-        run: |
-          set -e
-          python - <<'PY'
-          from pathlib import Path
-          from zipfile import ZipFile, ZIP_DEFLATED
-          root=Path('site')
-          if not (root/'index.html').is_file(): raise SystemExit('index.html وجود ندارد.')
-          out=Path('site.zip')
-          if out.exists(): out.unlink()
-          with ZipFile(out,'w',ZIP_DEFLATED) as z:
-              for p in root.rglob('*'):
-                  if p.is_file(): z.write(p,p.relative_to(root).as_posix())
-          with ZipFile(out) as z:
-              if 'index.html' not in z.namelist(): raise SystemExit('index.html داخل ZIP نیست.')
-              if z.testzip() is not None: raise SystemExit('ZIP خراب است.')
-      - name: تحویل فایل‌های واقعی سایت
-        if: always() && hashFiles('site/**') != ''
-        uses: actions/upload-artifact@v5
-        with:
-          name: خروجی-واقعی-سایت
-          path: site/
-          if-no-files-found: error
-          retention-days: 7
-      - name: تحویل ZIP واقعی سایت
-        if: always() && hashFiles('site.zip') != ''
-        uses: actions/upload-artifact@v5
-        with:
-          name: ZIP-واقعی-سایت
-          path: site.zip
-          if-no-files-found: error
-          retention-days: 7
       - name: گزارش اجرا
         if: always()
         uses: actions/upload-artifact@v5
