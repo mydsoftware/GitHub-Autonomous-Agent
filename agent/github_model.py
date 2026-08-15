@@ -1,5 +1,6 @@
 import json
 import os
+import urllib.error
 import urllib.request
 
 
@@ -24,9 +25,10 @@ SYSTEM_PROMPT = """
 
 
 def ask_model(task: str, context: str, feedback: str = "") -> dict:
-    """درخواست ساخت یا اصلاح پروژه را از GitHub Models دریافت می‌کند."""
-    token = os.environ["GITHUB_TOKEN"]
-    model = os.getenv("AI_MODEL", "openai/gpt-4.1")
+    """درخواست ساخت یا اصلاح پروژه را از ارائه‌دهنده مدل دریافت می‌کند."""
+    api_key = os.environ["OPENAI_API_KEY"]
+    model = os.getenv("AI_MODEL", "gpt-5-mini")
+    base_url = os.getenv("AI_BASE_URL", "https://api.openai.com/v1/chat/completions")
 
     prompt = f"""
 درخواست کاربر:
@@ -53,18 +55,22 @@ def ask_model(task: str, context: str, feedback: str = "") -> dict:
     ).encode("utf-8")
 
     request = urllib.request.Request(
-        "https://models.github.ai/inference/chat/completions",
+        base_url,
         data=payload,
         headers={
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         },
         method="POST",
     )
 
-    with urllib.request.urlopen(request, timeout=300) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"خطای API مدل ({exc.code}): {body[:2000]}") from exc
 
     text = data["choices"][0]["message"]["content"].strip()
     if text.startswith("```"):
