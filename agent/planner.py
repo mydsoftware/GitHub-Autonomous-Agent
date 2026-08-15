@@ -12,43 +12,10 @@ def call_openai(prompt: str) -> str:
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("Secret به نام OPENAI_API_KEY در GitHub تنظیم نشده است.")
-
-    body = json.dumps({
-        "model": MODEL,
-        "input": prompt,
-    }).encode("utf-8")
-
-    request = urllib.request.Request(
-        API_URL,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(request, timeout=180) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        try:
-            error_data = json.loads(raw)
-            message = error_data.get("error", {}).get("message") or raw
-            error_type = error_data.get("error", {}).get("type", "")
-            error_code = error_data.get("error", {}).get("code", "")
-            details = " | ".join(x for x in [error_type, error_code] if x)
-            if details:
-                message = f"{message} ({details})"
-        except json.JSONDecodeError:
-            message = raw or str(exc)
-        raise RuntimeError(
-            f"درخواست OpenAI با مدل '{MODEL}' رد شد: {message}"
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"اتصال به OpenAI برقرار نشد: {exc.reason}") from exc
-
+    body = json.dumps({"model": MODEL, "input": prompt}).encode("utf-8")
+    request = urllib.request.Request(API_URL, data=body, headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}, method="POST")
+    with urllib.request.urlopen(request, timeout=180) as response:
+        data = json.loads(response.read().decode("utf-8"))
     text = data.get("output_text")
     if not text:
         for item in data.get("output", []):
@@ -56,91 +23,59 @@ def call_openai(prompt: str) -> str:
                 if content.get("type") in ("output_text", "text") and content.get("text"):
                     text = content["text"]
                     break
-            if text:
-                break
-
-    if not text:
-        raise RuntimeError("OpenAI پاسخ متنی قابل استفاده برنگرداند.")
-
+            if text: break
+    if not text: raise RuntimeError("OpenAI پاسخ متنی قابل استفاده برنگرداند.")
     return text.strip()
 
 
 def clean_json(text: str) -> dict:
     if "```" in text:
         text = text.replace("```json", "").replace("```", "").strip()
-
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end < start:
-        raise ValueError("پاسخ مدل شامل JSON معتبر نبود.")
-
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end < start: raise ValueError("پاسخ مدل شامل JSON معتبر نبود.")
     plan = json.loads(text[start:end + 1])
-    if not isinstance(plan, dict):
-        raise ValueError("Plan باید یک شیء JSON باشد.")
-
+    if not isinstance(plan, dict): raise ValueError("Plan باید یک شیء JSON باشد.")
     plan.setdefault("summary", "")
     plan.setdefault("files", [])
     plan.setdefault("commands", [])
     plan["done"] = bool(plan.get("done", True))
-
     if not isinstance(plan["files"], list) or not isinstance(plan["commands"], list):
         raise ValueError("files و commands باید آرایه باشند.")
-
     return plan
 
 
 def main() -> None:
     task = os.environ.get("AGENT_TASK", "").strip()
-    if not task:
-        raise RuntimeError("دستور Agent خالی است.")
-
+    if not task: raise RuntimeError("دستور Agent خالی است.")
+    feedback = os.environ.get("AGENT_FEEDBACK", "").strip()
     root = pathlib.Path(".").resolve()
-    existing = []
-    for path in sorted(root.rglob("*")):
-        if path.is_file() and ".git" not in path.parts and "site" not in path.parts:
-            existing.append(str(path.relative_to(root)))
-
-    existing_text = "\n".join(existing[:250]) or "(مخزن فعلاً خالی است)"
-
+    existing = [str(p.relative_to(root)) for p in sorted(root.rglob("*")) if p.is_file() and ".git" not in p.parts and "site" not in p.parts][:250]
     prompt = f"""
 تو موتور برنامه‌ریزی GitHub Autonomous Agent هستی.
-دستور کاربر را به یک Plan اجرایی تبدیل کن تا روی Runner لینوکس اجرا شود.
+دستور کاربر را به Plan اجرایی تبدیل کن.
 
 دستور کاربر:
 {task}
 
-فایل‌های فعلی مخزن:
-{existing_text}
+بازخورد آخرین تست/امنیت:
+{feedback or "(بدون بازخورد)"}
 
-خروجی فقط JSON معتبر باشد و هیچ Markdown یا توضیح خارج از JSON نداشته باشد.
-ساختار:
-{{
-  "summary": "خلاصه فارسی کار",
-  "files": [{{"path": "مسیر نسبی", "content": "محتوای کامل فایل"}}],
-  "commands": ["دستورهای تست/Build لازم"],
-  "done": true
-}}
+فایل‌های فعلی:
+{chr(10).join(existing) or "(مخزن خالی)"}
+
+فقط JSON معتبر:
+{{"summary":"خلاصه فارسی","files":[{{"path":"مسیر نسبی","content":"محتوای کامل"}}],"commands":["تست/Build"],"done":true}}
 
 قوانین:
-- همه توضیحات و محتوای README و کامنت‌های تولیدی فارسی باشند مگر کد یا نام فنی لازم باشد.
-- مسیرها نسبی باشند و از .. استفاده نکنند.
-- فقط فایل‌های لازم را ایجاد/به‌روزرسانی کن.
-- برای سایت، فایل‌های واقعی و کامل تولید کن؛ نه placeholder.
-- دستورات commands باید فقط برای تست و Build باشند و با محیط Ubuntu سازگار باشند.
-- حداکثر 8 command تولید کن.
+- خطاها و Security Findingهای بازخورد را در اولویت اصلاح کن.
+- اصلاح حداقلی و امن انجام بده.
+- مسیر نسبی و بدون .. باشد.
+- سایت باید خروجی واقعی داشته باشد.
+- commands فقط تست/Build باشند.
+- حداکثر 8 command.
 """
-
     plan = clean_json(call_openai(prompt))
-    pathlib.Path("agent/chatgpt_plan.json").write_text(
-        json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-
-    print(json.dumps({
-        "model": MODEL,
-        "summary": plan.get("summary"),
-        "files": len(plan.get("files", [])),
-        "commands": len(plan.get("commands", [])),
-    }, ensure_ascii=False))
+    pathlib.Path("agent/chatgpt_plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":
