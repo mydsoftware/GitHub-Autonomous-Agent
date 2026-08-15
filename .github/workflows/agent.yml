@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       task:
-        description: "دستور کامل کاربر برای Agent"
+        description: "Plan JSON تولیدشده توسط ChatGPT"
         required: true
         type: string
   issues:
@@ -51,10 +51,7 @@ jobs:
         run: |
           mkdir -p site
           printf '%s\n' '<script>eval("x")</script>' > site/index.html
-          if python agent/security_gate.py; then
-            echo "Security Gate باید Finding را Block کند." >&2
-            exit 1
-          fi
+          if python agent/security_gate.py; then echo "Security Gate باید Finding را Block کند." >&2; exit 1; fi
           python - <<'PY'
           import json
           data=json.load(open('security-result.json', encoding='utf-8'))
@@ -64,7 +61,7 @@ jobs:
           PY
 
   executor:
-    name: 🤖 Agent + ChatGPT + AI-Agent-Manager Security
+    name: 🤖 اجرای Plan ChatGPT + AI-Agent-Manager Security
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'issues'
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -81,11 +78,7 @@ jobs:
         run: |
           test -n "$GH_TOKEN" || { echo "Secret GH_PAT برای اتصال به AI-Agent-Manager تنظیم نشده است." >&2; exit 1; }
           git clone --depth 1 --branch security-agent-release "https://x-access-token:${GH_TOKEN}@github.com/mydsoftware/AI-Agent-Manager.git" ai-agent-manager
-      - name: آماده‌سازی پایتون
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: دریافت دستور کاربر
+      - name: دریافت Plan از ChatGPT
         id: task
         env:
           WORKFLOW_TASK: ${{ inputs.task }}
@@ -94,13 +87,15 @@ jobs:
         shell: bash
         run: |
           set -e
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then TASK="$WORKFLOW_TASK"; else TASK="$ISSUE_BODY"; if [ -z "$TASK" ]; then TASK="$ISSUE_TITLE"; TASK="${TASK#\[Agent\] }"; fi; fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then TASK="$WORKFLOW_TASK"; else TASK="$ISSUE_BODY"; fi
           if [ -z "$(printf '%s' "$TASK" | tr -d '[:space:]')" ]; then exit 1; fi
-          { echo "task<<EOF"; printf '%s\n' "$TASK"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+          {
+            echo "task<<EOF"
+            printf '%s\n' "$TASK"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - name: اجرای حلقه Build → Test → Security → Fix
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           AGENT_TASK: ${{ steps.task.outputs.task }}
           AI_MANAGER_ROOT: ${{ github.workspace }}/ai-agent-manager
         shell: bash
@@ -112,7 +107,7 @@ jobs:
           for ROUND in $(seq 1 $MAX_ROUNDS); do
             echo "=== چرخه خودمختار $ROUND/$MAX_ROUNDS ==="
             export AGENT_FEEDBACK="$FEEDBACK"
-            if ! python agent/planner.py; then FEEDBACK="Planner شکست خورد؛ Plan را اصلاح کن."; continue; fi
+            if ! python agent/planner.py; then FEEDBACK="Plan ChatGPT معتبر نیست یا ساختار آن خطا دارد."; continue; fi
             if ! python agent/executor.py; then FEEDBACK="$(cat agent-result.json 2>/dev/null || echo Executor شکست خورد.)"; continue; fi
             if python agent/security_gate.py; then SUCCESS=1; break; fi
             FEEDBACK="$(cat security-result.json 2>/dev/null || echo Security Gate شکست خورد.)"
@@ -128,7 +123,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m "🤖 اجرای دستور ChatGPT + Security Gate"
+          git commit -m "🤖 اجرای Plan ChatGPT + Security Gate"
           git fetch origin main
           git rebase origin/main
           git push origin HEAD:main
