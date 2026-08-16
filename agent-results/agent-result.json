@@ -1,6 +1,6 @@
 {
   "success": true,
-  "summary": "Demo end-to-end: ساخت یک صفحه فروشگاهی ساده با HTML/CSS توسط ChatGPT",
+  "summary": "End-to-end validation after Security scope fix",
   "tests": [],
   "source": "ChatGPT",
   "error": null,
