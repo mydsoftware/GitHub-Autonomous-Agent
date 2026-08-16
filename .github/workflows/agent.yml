@@ -77,6 +77,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: دریافت Executor عامل
+        env:
+          TARGET_WORKSPACE: ${{ github.workspace }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$TARGET_WORKSPACE/agent"
+          curl -fsSL "https://raw.githubusercontent.com/mydsoftware/GitHub-Autonomous-Agent/main/agent/executor.py" -o "$TARGET_WORKSPACE/agent/executor.py"
+          test -s "$TARGET_WORKSPACE/agent/executor.py"
+          echo "Executor عامل با موفقیت آماده شد."
+
       - name: تعیین Repository مقصد
         id: target
         env:
@@ -177,7 +188,8 @@ jobs:
         run: |
           set -uo pipefail
           echo "=== شروع Executor ==="
-          python agent/executor.py
+          cp "$GITHUB_WORKSPACE/agent/executor.py" "$AGENT_WORKSPACE/agent/executor.py"
+          python "$AGENT_WORKSPACE/agent/executor.py"
           EXECUTOR_CODE=$?
           echo "=== کد خروج Executor: $EXECUTOR_CODE ==="
           echo "=== گزارش Executor ==="
