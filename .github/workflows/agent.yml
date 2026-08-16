@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - "chat_requests/*.json"
+  repository_dispatch:
+    types: [ai-agent-project]
   workflow_dispatch:
     inputs:
       task:
@@ -24,7 +26,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: عامل-متصل-به-ChatGPT
+  group: عامل-متصل-به-ChatGPT-${{ github.event.client_payload.target_repository || github.repository }}
   cancel-in-progress: false
 
 jobs:
@@ -69,31 +71,75 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - name: دریافت مخزن
+      - name: دریافت مخزن Agent
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: true
+
+      - name: آماده‌سازی پایتون
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
       - name: دریافت نسخه پایدار Security Agent
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         shell: bash
         run: |
+          set -euo pipefail
           test -n "$GH_TOKEN" || { echo "Secret GH_PAT برای اتصال به AI-Agent-Manager تنظیم نشده است." >&2; exit 1; }
           git clone --depth 1 --branch security-agent-release "https://x-access-token:${GH_TOKEN}@github.com/mydsoftware/AI-Agent-Manager.git" ai-agent-manager
+
+      - name: آماده‌سازی Repository مقصد
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
+          TARGET_BRANCH: ${{ github.event.client_payload.target_branch }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            test -n "$TARGET_REPOSITORY" || { echo "target_repository در Dispatch وجود ندارد." >&2; exit 1; }
+            BRANCH="${TARGET_BRANCH:-main}"
+            git clone --depth 1 --branch "$BRANCH" "https://x-access-token:${GH_TOKEN}@github.com/${TARGET_REPOSITORY}.git" target-project
+            echo "workspace=${GITHUB_WORKSPACE}/target-project" >> "$GITHUB_OUTPUT"
+            echo "repository=$TARGET_REPOSITORY" >> "$GITHUB_OUTPUT"
+            echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "workspace=${GITHUB_WORKSPACE}" >> "$GITHUB_OUTPUT"
+            echo "repository=${GITHUB_REPOSITORY}" >> "$GITHUB_OUTPUT"
+            echo "branch=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: دریافت Plan از ChatGPT
         id: task
         env:
           WORKFLOW_TASK: ${{ inputs.task }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             TASK="$WORKFLOW_TASK"
           elif [ "$EVENT_NAME" = "issues" ]; then
             TASK="$ISSUE_BODY"
+          elif [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            python - <<'PY'
+          import json, os
+          payload = json.loads(os.environ["DISPATCH_PAYLOAD"])
+          plan = payload.get("plan")
+          if not isinstance(plan, dict):
+              raise SystemExit("Dispatch باید plan JSON داشته باشد.")
+          with open("agent/chatgpt_plan.json", "w", encoding="utf-8") as f:
+              json.dump(plan, f, ensure_ascii=False, indent=2)
+          print(json.dumps({"summary": plan.get("summary", ""), "files": len(plan.get("files", [])), "commands": len(plan.get("commands", []))}, ensure_ascii=False))
+          PY
+            exit 0
           else
             REQUEST_FILE=$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^chat_requests/.*\.json$' | tail -n 1 || true)
             test -n "$REQUEST_FILE" || REQUEST_FILE=$(find chat_requests -maxdepth 1 -type f -name '*.json' | sort | tail -n 1)
@@ -101,14 +147,14 @@ jobs:
             TASK=$(cat "$REQUEST_FILE")
           fi
           test -n "$(printf '%s' "$TASK" | tr -d '[:space:]')"
-          {
-            echo "task<<EOF"
-            printf '%s\n' "$TASK"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$TASK" > agent/chatgpt_plan.json
+
       - name: اجرای Build → Test → AI-Agent-Manager Security
         env:
-          AGENT_TASK: ${{ steps.task.outputs.task }}
+          AGENT_PLAN: ${{ github.workspace }}/agent/chatgpt_plan.json
+          AGENT_WORKSPACE: ${{ steps.target.outputs.workspace }}
+          AGENT_RESULT: ${{ github.workspace }}/agent-result.json
+          SECURITY_RESULT: ${{ github.workspace }}/security-result.json
           AI_MANAGER_ROOT: ${{ github.workspace }}/ai-agent-manager
         shell: bash
         run: |
@@ -116,6 +162,7 @@ jobs:
           python agent/planner.py
           python agent/executor.py
           python agent/manager_security.py
+
       - name: ثبت نتیجه
         if: always()
         shell: bash
@@ -124,6 +171,36 @@ jobs:
           cp -f agent-result.json agent-results/agent-result.json 2>/dev/null || true
           cp -f agent/chatgpt_plan.json agent-results/chatgpt_plan.json 2>/dev/null || true
           cp -f security-result.json agent-results/security-result.json 2>/dev/null || true
+          if [ -f agent-results/agent-result.json ]; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path("agent-results/agent-result.json")
+          d=json.loads(p.read_text(encoding="utf-8"))
+          print(json.dumps({"success": d.get("success"), "summary": d.get("summary"), "error": d.get("error")}, ensure_ascii=False))
+          PY
+          fi
+
+      - name: ثبت تغییرات Repository مقصد
+        if: success() && github.event_name == 'repository_dispatch'
+        env:
+          TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
+          TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
+          TARGET_BRANCH: ${{ steps.target.outputs.branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$TARGET_WORKSPACE"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "تغییری برای ثبت وجود ندارد."
+            exit 0
+          fi
+          git commit -m "feat: build project via AI-Agent-Manager"
+          git push origin "HEAD:${TARGET_BRANCH}"
+
       - name: گزارش اجرا
         if: always()
         uses: actions/upload-artifact@v5
@@ -132,7 +209,8 @@ jobs:
           path: agent-results/
           if-no-files-found: ignore
           retention-days: 7
-      - name: ثبت خلاصه نتیجه در Repository
+
+      - name: ثبت خلاصه نتیجه در Repository Agent
         if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
@@ -147,7 +225,7 @@ jobs:
   deploy:
     name: 🚀 Deploy پس از Security Gate
     needs: executor
-    if: needs.executor.result == 'success'
+    if: needs.executor.result == 'success' && github.event_name != 'repository_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
