@@ -66,11 +66,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - name: دریافت مخزن Agent
+      - name: دریافت کد عامل
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - name: آماده‌سازی پایتون
         uses: actions/setup-python@v6
@@ -83,25 +83,35 @@ jobs:
           TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
           TARGET_BRANCH: ${{ github.event.client_payload.target_branch }}
           EVENT_NAME: ${{ github.event_name }}
+          GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
             test -n "$TARGET_REPOSITORY" || { echo "target_repository در Dispatch وجود ندارد." >&2; exit 1; }
             BRANCH="${TARGET_BRANCH:-main}"
+            TARGET_DIR="$RUNNER_TEMP/target-repository"
+            rm -rf "$TARGET_DIR"
+            git clone --depth 1 --branch "$BRANCH" "https://x-access-token:${GITHUB_TOKEN}@github.com/${TARGET_REPOSITORY}.git" "$TARGET_DIR"
           else
             BRANCH="${GITHUB_REF_NAME}"
             TARGET_REPOSITORY="$GITHUB_REPOSITORY"
+            TARGET_DIR="$GITHUB_WORKSPACE"
           fi
-          echo "workspace=${GITHUB_WORKSPACE}" >> "$GITHUB_OUTPUT"
+          test -d "$TARGET_DIR/.git"
           echo "repository=$TARGET_REPOSITORY" >> "$GITHUB_OUTPUT"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "workspace=$TARGET_DIR" >> "$GITHUB_OUTPUT"
+          echo "Repository مقصد: $TARGET_REPOSITORY"
+          echo "شاخه مقصد: $BRANCH"
+          echo "Workspace مقصد: $TARGET_DIR"
 
       - name: ثبت وضعیت شروع اجرا
         if: github.event_name == 'repository_dispatch'
         env:
           TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
           TARGET_BRANCH: ${{ steps.target.outputs.branch }}
+          TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
           RUN_ID: ${{ github.run_id }}
           PLAN_SUMMARY: ${{ github.event.client_payload.plan.summary }}
         shell: bash
@@ -110,24 +120,17 @@ jobs:
           python - <<'PY'
           import json, os
           from datetime import datetime, timezone
-          state = {
-              "status": "running",
-              "phase": "build-test-security",
-              "repository": os.environ["TARGET_REPOSITORY"],
-              "branch": os.environ["TARGET_BRANCH"],
-              "agent_run_id": os.environ["RUN_ID"],
-              "summary": os.environ.get("PLAN_SUMMARY", ""),
-              "started_at": datetime.now(timezone.utc).isoformat(),
-          }
-          os.makedirs("agent", exist_ok=True)
-          with open("agent/execution-state.json", "w", encoding="utf-8") as f:
-              json.dump(state, f, ensure_ascii=False, indent=2)
+          root=os.environ['TARGET_WORKSPACE']
+          state={"status":"running","phase":"build-test-security","repository":os.environ['TARGET_REPOSITORY'],"branch":os.environ['TARGET_BRANCH'],"agent_run_id":os.environ['RUN_ID'],"summary":os.environ.get('PLAN_SUMMARY',''),"started_at":datetime.now(timezone.utc).isoformat()}
+          os.makedirs(os.path.join(root,'agent'),exist_ok=True)
+          with open(os.path.join(root,'agent','execution-state.json'),'w',encoding='utf-8') as f: json.dump(state,f,ensure_ascii=False,indent=2)
           PY
+          cd "$TARGET_WORKSPACE"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add agent/execution-state.json
-          git commit -m "شروع اجرای مستقل عامل"
-          git push origin "HEAD:${TARGET_BRANCH}"
+          git commit -m "شروع اجرای مستقل عامل" || true
+          git push "https://x-access-token:${{ github.token }}@github.com/${TARGET_REPOSITORY}.git" "HEAD:${TARGET_BRANCH}"
 
       - name: دریافت Plan از ChatGPT
         env:
@@ -138,6 +141,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p agent
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             TASK="$WORKFLOW_TASK"
             printf '%s\n' "$TASK" > agent/chatgpt_plan.json
@@ -146,15 +150,12 @@ jobs:
           elif [ "$EVENT_NAME" = "repository_dispatch" ]; then
             python - <<'PY'
           import json, os
-          payload = json.loads(os.environ["DISPATCH_PAYLOAD"])
-          plan = payload.get("plan")
-          if not isinstance(plan, dict):
-              raise SystemExit("Dispatch باید plan JSON داشته باشد.")
-          if not isinstance(plan.get("files"), list) or not isinstance(plan.get("commands"), list) or plan.get("done") is not True:
-              raise SystemExit("Plan باید شامل files و commands و done=true باشد.")
-          with open("agent/chatgpt_plan.json", "w", encoding="utf-8") as f:
-              json.dump(plan, f, ensure_ascii=False, indent=2)
-          print(json.dumps({"summary": plan.get("summary", ""), "files": len(plan.get("files", [])), "commands": len(plan.get("commands", []))}, ensure_ascii=False))
+          payload=json.loads(os.environ['DISPATCH_PAYLOAD'])
+          plan=payload.get('plan')
+          if not isinstance(plan,dict): raise SystemExit('Dispatch باید plan JSON داشته باشد.')
+          if not isinstance(plan.get('files'),list) or not isinstance(plan.get('commands'),list) or plan.get('done') is not True: raise SystemExit('Plan باید شامل files و commands و done=true باشد.')
+          with open('agent/chatgpt_plan.json','w',encoding='utf-8') as f: json.dump(plan,f,ensure_ascii=False,indent=2)
+          print(json.dumps({'summary':plan.get('summary',''),'files':len(plan.get('files',[])),'commands':len(plan.get('commands',[]))},ensure_ascii=False))
           PY
           else
             REQUEST_FILE=$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^chat_requests/.*\.json$' | tail -n 1 || true)
@@ -163,35 +164,59 @@ jobs:
             cp "$REQUEST_FILE" agent/chatgpt_plan.json
           fi
           test -s agent/chatgpt_plan.json
+          python -m json.tool agent/chatgpt_plan.json >/dev/null
+          echo "Plan فارسی با موفقیت آماده شد."
 
       - name: اجرای ساخت، تست و امنیت
+        id: run_agent
         env:
           AGENT_PLAN: ${{ github.workspace }}/agent/chatgpt_plan.json
           AGENT_WORKSPACE: ${{ steps.target.outputs.workspace }}
           AGENT_RESULT: ${{ github.workspace }}/agent-result.json
         shell: bash
         run: |
-          set -euo pipefail
-          python agent/planner.py
+          set -uo pipefail
+          echo "=== شروع Executor ==="
           python agent/executor.py
-          python security_check.py
+          EXECUTOR_CODE=$?
+          echo "=== کد خروج Executor: $EXECUTOR_CODE ==="
+          echo "=== گزارش Executor ==="
+          cat agent-result.json 2>/dev/null || true
+          if [ "$EXECUTOR_CODE" -ne 0 ]; then
+            echo "Executor با خطا پایان یافت." >&2
+            exit "$EXECUTOR_CODE"
+          fi
+          echo "=== شروع بررسی امنیتی ==="
+          python "$AGENT_WORKSPACE/security_check.py"
+          SECURITY_CODE=$?
+          echo "=== کد خروج بررسی امنیتی: $SECURITY_CODE ==="
+          cat "$AGENT_WORKSPACE/security-result.json" 2>/dev/null || true
+          exit "$SECURITY_CODE"
 
-      - name: ثبت نتیجه
+      - name: ثبت گزارش‌های اجرا
         if: always()
         shell: bash
         run: |
           mkdir -p agent-results
           cp -f agent-result.json agent-results/agent-result.json 2>/dev/null || true
           cp -f agent/chatgpt_plan.json agent-results/chatgpt_plan.json 2>/dev/null || true
-          cp -f security-result.json agent-results/security-result.json 2>/dev/null || true
+          cp -f "${{ steps.target.outputs.workspace }}/security-result.json" agent-results/security-result.json 2>/dev/null || true
+          cp -f "${{ steps.target.outputs.workspace }}/agent/execution-state.json" agent-results/execution-state.json 2>/dev/null || true
+          echo "=== فهرست گزارش‌ها ==="
+          find agent-results -maxdepth 1 -type f -print || true
+          echo "=== گزارش Executor ==="
+          cat agent-results/agent-result.json 2>/dev/null || true
 
       - name: ثبت تغییرات Repository مقصد
-        if: success() && github.event_name == 'repository_dispatch'
+        if: always() && github.event_name == 'repository_dispatch'
         env:
           TARGET_BRANCH: ${{ steps.target.outputs.branch }}
+          TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
+          TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          cd "$TARGET_WORKSPACE"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
@@ -199,40 +224,34 @@ jobs:
             echo "تغییری برای ثبت وجود ندارد."
             exit 0
           fi
-          git commit -m "ساخت پروژه با عامل خودکار"
-          git push origin "HEAD:${TARGET_BRANCH}"
+          git commit -m "ساخت و ثبت نتیجه پروژه با عامل خودکار"
+          git push "https://x-access-token:${{ github.token }}@github.com/${TARGET_REPOSITORY}.git" "HEAD:${TARGET_BRANCH}"
 
       - name: ثبت وضعیت نهایی اجرا
         if: always() && github.event_name == 'repository_dispatch'
         env:
           TARGET_BRANCH: ${{ steps.target.outputs.branch }}
           TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
+          TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
           RUN_ID: ${{ github.run_id }}
-          FINAL_STATUS: ${{ job.status == 'success' && 'completed' || 'failed' }}
+          JOB_STATUS: ${{ job.status }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           python - <<'PY'
           import json, os
           from datetime import datetime, timezone
-          status = os.environ["FINAL_STATUS"]
-          state = {
-              "status": status,
-              "phase": "completed" if status == "completed" else "failed",
-              "repository": os.environ["TARGET_REPOSITORY"],
-              "branch": os.environ["TARGET_BRANCH"],
-              "agent_run_id": os.environ["RUN_ID"],
-              "finished_at": datetime.now(timezone.utc).isoformat(),
-          }
-          with open("agent/execution-state.json", "w", encoding="utf-8") as f:
-              json.dump(state, f, ensure_ascii=False, indent=2)
+          root=os.environ['TARGET_WORKSPACE']; status='completed' if os.environ['JOB_STATUS']=='success' else 'failed'
+          state={"status":status,"phase":"completed" if status=='completed' else 'failed',"repository":os.environ['TARGET_REPOSITORY'],"branch":os.environ['TARGET_BRANCH'],"agent_run_id":os.environ['RUN_ID'],"finished_at":datetime.now(timezone.utc).isoformat()}
+          os.makedirs(os.path.join(root,'agent'),exist_ok=True)
+          with open(os.path.join(root,'agent','execution-state.json'),'w',encoding='utf-8') as f: json.dump(state,f,ensure_ascii=False,indent=2)
           PY
+          cd "$TARGET_WORKSPACE"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add agent/execution-state.json
-          if git diff --cached --quiet; then exit 0; fi
-          git commit -m "ثبت وضعیت نهایی اجرای عامل"
-          git push origin "HEAD:${TARGET_BRANCH}"
+          git commit -m "ثبت وضعیت نهایی اجرای عامل" || true
+          git push "https://x-access-token:${{ github.token }}@github.com/${TARGET_REPOSITORY}.git" "HEAD:${TARGET_BRANCH}" || true
 
       - name: گزارش اجرا
         if: always()
