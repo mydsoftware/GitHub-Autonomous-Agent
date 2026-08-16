@@ -36,10 +36,13 @@ def main() -> int:
     from agents.security_agent import SecurityAgent
     from manager.task import Task
 
-    source = collect_source(pathlib.Path(".").resolve())
+    root = pathlib.Path(os.getenv("AGENT_WORKSPACE", ".")).resolve()
+    source = collect_source(root)
     task = Task(id=f"security-{uuid.uuid4().hex[:8]}", title="Security scan", description=json.dumps({"action": "source", "source": source}, ensure_ascii=False), agent="security")
     result = json.loads(SecurityAgent().run(task))
-    pathlib.Path("security-result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    output = pathlib.Path(os.getenv("SECURITY_RESULT", "security-result.json")).resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("status") == "passed" else 1
 
