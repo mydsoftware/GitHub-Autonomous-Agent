@@ -1,0 +1,11 @@
+{
+  "done": true,
+  "summary": "Demo request contract only",
+  "files": [
+    {
+      "path": "site/index.html",
+      "content": "<!doctype html><html><body><h1>ChatGPT Bridge Demo</h1></body></html>"
+    }
+  ],
+  "commands": []
+}
