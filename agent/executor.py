@@ -1,4 +1,5 @@
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -9,9 +10,17 @@ MAX_COMMANDS = 8
 ALLOWED_COMMAND_PREFIXES = ("python ", "python3 ", "pytest", "pip ", "pip3 ", "npm ", "npx ", "pnpm ", "yarn ", "node ", "ruff ", "mypy ", "eslint ", "tsc ", "vite")
 
 
+def workspace() -> pathlib.Path:
+    return pathlib.Path(os.getenv("AGENT_WORKSPACE", ".")).resolve()
+
+
+def plan_path() -> pathlib.Path:
+    return pathlib.Path(os.getenv("AGENT_PLAN", "agent/chatgpt_plan.json")).resolve()
+
+
 def apply_files(root: pathlib.Path, files: list[dict]) -> int:
-    """فایل‌های تولیدشده توسط ChatGPT را با اعتبارسنجی مسیر در مخزن ایجاد می‌کند."""
     applied = 0
+    root = root.resolve()
     for item in files:
         if not isinstance(item, dict) or not item.get("path"):
             raise ValueError("هر فایل باید شامل path و content باشد.")
@@ -19,7 +28,7 @@ def apply_files(root: pathlib.Path, files: list[dict]) -> int:
         if relative.is_absolute() or ".." in relative.parts:
             raise ValueError(f"مسیر غیرمجاز: {item['path']}")
         target = (root / pathlib.Path(*relative.parts)).resolve()
-        if root.resolve() != target and root.resolve() not in target.parents:
+        if root != target and root not in target.parents:
             raise ValueError(f"مسیر خارج از پروژه: {item['path']}")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(str(item.get("content", "")), encoding="utf-8")
@@ -45,7 +54,6 @@ def run_command(root: pathlib.Path, command: str) -> tuple[int, str]:
 
 
 def load_plan(path: pathlib.Path) -> dict:
-    """برنامه ChatGPT را می‌خواند و خطای ناشی از خط جدید خام در رشته‌های کد را نیز مدیریت می‌کند."""
     if not path.exists():
         raise FileNotFoundError(f"برنامه ChatGPT پیدا نشد: {path}")
     raw = path.read_text(encoding="utf-8")
@@ -63,10 +71,8 @@ def load_plan(path: pathlib.Path) -> dict:
         raise ValueError("برنامه ChatGPT باید یک شیء JSON باشد.")
     files = plan.get("files", [])
     commands = plan.get("commands", [])
-    if not isinstance(files, list):
-        raise ValueError("فیلد files باید آرایه باشد.")
-    if not isinstance(commands, list):
-        raise ValueError("فیلد commands باید آرایه باشد.")
+    if not isinstance(files, list) or not isinstance(commands, list):
+        raise ValueError("files و commands باید آرایه باشند.")
     for index, item in enumerate(files):
         if not isinstance(item, dict) or not isinstance(item.get("path"), str) or not isinstance(item.get("content", ""), str):
             raise ValueError(f"فایل شماره {index + 1} ساختار معتبری ندارد.")
@@ -77,12 +83,13 @@ def load_plan(path: pathlib.Path) -> dict:
 
 
 def main() -> int:
-    root = pathlib.Path(".").resolve()
-    plan_path = root / "agent" / "chatgpt_plan.json"
-    result_path = root / "agent-result.json"
-    result = {"success": False, "summary": "", "tests": [], "source": "ChatGPT", "error": None}
+    root = workspace()
+    path = plan_path()
+    result_path = pathlib.Path(os.getenv("AGENT_RESULT", "agent-result.json")).resolve()
+    result = {"success": False, "summary": "", "tests": [], "source": "ChatGPT", "error": None, "workspace": str(root)}
     try:
-        plan = load_plan(plan_path)
+        root.mkdir(parents=True, exist_ok=True)
+        plan = load_plan(path)
         result["summary"] = plan.get("summary", "")
         files = plan.get("files", [])
         commands = plan.get("commands", [])[:MAX_COMMANDS]
@@ -102,6 +109,7 @@ def main() -> int:
         result["error"] = f"{type(exc).__name__}: {exc}"
         print("خطای Executor:", result["error"], file=sys.stderr)
         traceback.print_exc()
+    result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print("گزارش Executor:")
     print(json.dumps(result, ensure_ascii=False, indent=2))
