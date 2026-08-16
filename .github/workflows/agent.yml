@@ -115,6 +115,26 @@ jobs:
           python -m json.tool "$TARGET_WORKSPACE/agent/chatgpt_plan.json" >/dev/null
           echo "Workspace مقصد آماده است."
 
+      - name: ثبت Snapshot قبل از Executor
+        if: always()
+        env:
+          TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
+        shell: bash
+        run: |
+          set +e
+          mkdir -p "$TARGET_WORKSPACE/agent"
+          {
+            echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "event=$GITHUB_EVENT_NAME"
+            echo "run=$GITHUB_RUN_ID"
+            echo "repository=$GITHUB_REPOSITORY"
+            echo "target=${{ steps.target.outputs.repository }}"
+            echo "branch=${{ steps.target.outputs.branch }}"
+            echo "workspace=$TARGET_WORKSPACE"
+            echo "--- files ---"
+            find "$TARGET_WORKSPACE/agent" -maxdepth 1 -type f -printf '%f\n' | sort
+          } > "$TARGET_WORKSPACE/agent/execution-start.txt"
+
       - name: اجرای Executor و ثبت اجباری گزارش
         id: run_agent
         continue-on-error: true
