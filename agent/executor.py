@@ -15,7 +15,14 @@ def workspace() -> pathlib.Path:
 
 
 def plan_path() -> pathlib.Path:
-    return pathlib.Path(os.getenv("AGENT_PLAN", "agent/chatgpt_plan.json")).resolve()
+    configured = pathlib.Path(os.getenv("AGENT_PLAN", "agent/chatgpt_plan.json")).resolve()
+    if configured.exists():
+        return configured
+    fallback = workspace() / "agent" / "chatgpt_plan.json"
+    if fallback.exists():
+        print(f"مسیر Plan تنظیم‌شده پیدا نشد؛ استفاده از Plan مقصد: {fallback}", flush=True)
+        return fallback.resolve()
+    return configured
 
 
 def apply_files(root: pathlib.Path, files: list[dict]) -> int:
@@ -86,7 +93,7 @@ def main() -> int:
     root = workspace()
     path = plan_path()
     result_path = pathlib.Path(os.getenv("AGENT_RESULT", "agent-result.json")).resolve()
-    result = {"success": False, "summary": "", "tests": [], "source": "ChatGPT", "error": None, "workspace": str(root)}
+    result = {"success": False, "summary": "", "tests": [], "source": "ChatGPT", "error": None, "workspace": str(root), "plan": str(path)}
     try:
         root.mkdir(parents=True, exist_ok=True)
         plan = load_plan(path)
