@@ -117,6 +117,30 @@ jobs:
           echo "شاخه مقصد: $BRANCH"
           echo "Workspace مقصد: $TARGET_DIR"
 
+      - name: تشخیص پیش از اجرای Agent
+        env:
+          TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
+          TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "===== گزارش تشخیصی فارسی ====="
+          echo "Repository مقصد: $TARGET_REPOSITORY"
+          echo "Workspace مقصد: $TARGET_WORKSPACE"
+          echo "نسخه Python: $(python --version)"
+          echo "محتویات ریشه Repository:"
+          find "$TARGET_WORKSPACE" -maxdepth 2 -type f -print | sort | head -100
+          echo "--- Executor اصلی ---"
+          test -s "$GITHUB_WORKSPACE/agent/executor.py"
+          wc -c "$GITHUB_WORKSPACE/agent/executor.py"
+          echo "--- امنیت ---"
+          test -s "$TARGET_WORKSPACE/security_check.py"
+          echo "security_check.py موجود است."
+          echo "--- دسترسی نوشتن ---"
+          test -w "$TARGET_WORKSPACE"
+          echo "Workspace قابل نوشتن است."
+          echo "===== پایان گزارش تشخیصی ====="
+
       - name: ثبت وضعیت شروع اجرا
         if: github.event_name == 'repository_dispatch'
         env:
@@ -189,6 +213,8 @@ jobs:
           set -uo pipefail
           echo "=== شروع Executor ==="
           cp "$GITHUB_WORKSPACE/agent/executor.py" "$AGENT_WORKSPACE/agent/executor.py"
+          test -s "$AGENT_WORKSPACE/agent/executor.py"
+          echo "Executor در Repository مقصد آماده است."
           python "$AGENT_WORKSPACE/agent/executor.py"
           EXECUTOR_CODE=$?
           echo "=== کد خروج Executor: $EXECUTOR_CODE ==="
