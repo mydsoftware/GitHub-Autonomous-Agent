@@ -100,11 +100,43 @@ jobs:
             BRANCH="${TARGET_BRANCH:-main}"
           else
             BRANCH="${GITHUB_REF_NAME}"
-            echo "TARGET_REPOSITORY=$GITHUB_REPOSITORY" >> "$GITHUB_ENV"
+            TARGET_REPOSITORY="$GITHUB_REPOSITORY"
           fi
           echo "workspace=${GITHUB_WORKSPACE}" >> "$GITHUB_OUTPUT"
-          echo "repository=${TARGET_REPOSITORY:-$GITHUB_REPOSITORY}" >> "$GITHUB_OUTPUT"
+          echo "repository=$TARGET_REPOSITORY" >> "$GITHUB_OUTPUT"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: ثبت وضعیت شروع اجرا
+        if: github.event_name == 'repository_dispatch'
+        env:
+          TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
+          TARGET_BRANCH: ${{ steps.target.outputs.branch }}
+          RUN_ID: ${{ github.run_id }}
+          PLAN_SUMMARY: ${{ github.event.client_payload.plan.summary }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          state = {
+              "status": "running",
+              "phase": "build-test-security",
+              "repository": os.environ["TARGET_REPOSITORY"],
+              "branch": os.environ["TARGET_BRANCH"],
+              "agent_run_id": os.environ["RUN_ID"],
+              "summary": os.environ.get("PLAN_SUMMARY", ""),
+              "started_at": datetime.now(timezone.utc).isoformat(),
+          }
+          os.makedirs("agent", exist_ok=True)
+          with open("agent/execution-state.json", "w", encoding="utf-8") as f:
+              json.dump(state, f, ensure_ascii=False, indent=2)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add agent/execution-state.json
+          git commit -m "chore: mark autonomous execution started"
+          git push origin "HEAD:${TARGET_BRANCH}"
 
       - name: دریافت Plan از ChatGPT
         id: task
@@ -189,6 +221,38 @@ jobs:
             exit 0
           fi
           git commit -m "feat: build project via AI-Agent-Manager"
+          git push origin "HEAD:${TARGET_BRANCH}"
+
+      - name: ثبت وضعیت نهایی اجرا
+        if: always() && github.event_name == 'repository_dispatch'
+        env:
+          TARGET_BRANCH: ${{ steps.target.outputs.branch }}
+          TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
+          RUN_ID: ${{ github.run_id }}
+          FINAL_STATUS: ${{ job.status == 'success' && 'completed' || 'failed' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          status = os.environ["FINAL_STATUS"]
+          state = {
+              "status": status,
+              "phase": "completed" if status == "completed" else "failed",
+              "repository": os.environ["TARGET_REPOSITORY"],
+              "branch": os.environ["TARGET_BRANCH"],
+              "agent_run_id": os.environ["RUN_ID"],
+              "finished_at": datetime.now(timezone.utc).isoformat(),
+          }
+          with open("agent/execution-state.json", "w", encoding="utf-8") as f:
+              json.dump(state, f, ensure_ascii=False, indent=2)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add agent/execution-state.json
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "chore: publish autonomous execution state"
           git push origin "HEAD:${TARGET_BRANCH}"
 
       - name: گزارش اجرا
