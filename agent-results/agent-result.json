@@ -1,8 +1,8 @@
 {
   "success": true,
-  "summary": "Demo request contract only",
+  "summary": "Demo end-to-end: ساخت یک صفحه فروشگاهی ساده با HTML/CSS توسط ChatGPT",
   "tests": [],
   "source": "ChatGPT",
   "error": null,
-  "files_applied": 1
+  "files_applied": 2
 }
