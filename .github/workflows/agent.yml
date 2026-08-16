@@ -17,6 +17,7 @@ on:
   pull_request:
     paths:
       - "agent/**"
+      - "security_check.py"
       - ".github/workflows/agent.yml"
 
 permissions:
@@ -31,7 +32,7 @@ concurrency:
 
 jobs:
   integration:
-    name: 🧪 تست اتصال Security Agent
+    name: 🧪 آزمون بررسی امنیتی فارسی
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -41,30 +42,26 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: دریافت نسخه پایدار Security Agent
+      - name: آزمون امنیتی واقعی
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch security-agent-release "https://github.com/mydsoftware/AI-Agent-Manager.git" ai-agent-manager
-      - name: بررسی Security bridge
-        run: python -m py_compile ai-agent-manager/manager_security.py
-      - name: آزمون واقعی SecurityAgent
-        env:
-          AI_MANAGER_ROOT: ${{ github.workspace }}/ai-agent-manager
-        run: |
           mkdir -p site
           printf '%s\n' '<script>eval("x")</script>' > site/index.html
-          if python ai-agent-manager/manager_security.py; then echo "SecurityAgent باید Finding را Block کند." >&2; exit 1; fi
+          if python security_check.py; then
+            echo "بررسی امنیتی باید Finding سطح بالا را مسدود کند." >&2
+            exit 1
+          fi
           python - <<'PY'
           import json
           data=json.load(open('security-result.json', encoding='utf-8'))
           assert data['status'] == 'failed'
           assert any(f['severity'] == 'high' for f in data['findings'])
-          print('AI-Agent-Manager SecurityAgent integration test passed.')
+          print('آزمون امنیتی موفق بود.')
           PY
 
   executor:
-    name: 🤖 اجرای Plan ChatGPT + AI-Agent-Manager Security
+    name: 🤖 اجرای Plan فارسی و Security
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -79,12 +76,6 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-
-      - name: دریافت نسخه پایدار Security Agent
-        shell: bash
-        run: |
-          set -euo pipefail
-          git clone --depth 1 --branch security-agent-release "https://github.com/mydsoftware/AI-Agent-Manager.git" ai-agent-manager
 
       - name: تعیین Repository مقصد
         id: target
@@ -135,11 +126,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add agent/execution-state.json
-          git commit -m "chore: mark autonomous execution started"
+          git commit -m "شروع اجرای مستقل عامل"
           git push origin "HEAD:${TARGET_BRANCH}"
 
       - name: دریافت Plan از ChatGPT
-        id: task
         env:
           WORKFLOW_TASK: ${{ inputs.task }}
           ISSUE_BODY: ${{ github.event.issue.body }}
@@ -150,8 +140,9 @@ jobs:
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             TASK="$WORKFLOW_TASK"
+            printf '%s\n' "$TASK" > agent/chatgpt_plan.json
           elif [ "$EVENT_NAME" = "issues" ]; then
-            TASK="$ISSUE_BODY"
+            printf '%s\n' "$ISSUE_BODY" > agent/chatgpt_plan.json
           elif [ "$EVENT_NAME" = "repository_dispatch" ]; then
             python - <<'PY'
           import json, os
@@ -159,33 +150,31 @@ jobs:
           plan = payload.get("plan")
           if not isinstance(plan, dict):
               raise SystemExit("Dispatch باید plan JSON داشته باشد.")
+          if not isinstance(plan.get("files"), list) or not isinstance(plan.get("commands"), list) or plan.get("done") is not True:
+              raise SystemExit("Plan باید شامل files و commands و done=true باشد.")
           with open("agent/chatgpt_plan.json", "w", encoding="utf-8") as f:
               json.dump(plan, f, ensure_ascii=False, indent=2)
           print(json.dumps({"summary": plan.get("summary", ""), "files": len(plan.get("files", [])), "commands": len(plan.get("commands", []))}, ensure_ascii=False))
           PY
-            exit 0
           else
             REQUEST_FILE=$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^chat_requests/.*\.json$' | tail -n 1 || true)
             test -n "$REQUEST_FILE" || REQUEST_FILE=$(find chat_requests -maxdepth 1 -type f -name '*.json' | sort | tail -n 1)
             test -n "$REQUEST_FILE"
-            TASK=$(cat "$REQUEST_FILE")
+            cp "$REQUEST_FILE" agent/chatgpt_plan.json
           fi
-          test -n "$(printf '%s' "$TASK" | tr -d '[:space:]')"
-          printf '%s\n' "$TASK" > agent/chatgpt_plan.json
+          test -s agent/chatgpt_plan.json
 
-      - name: اجرای Build → Test → AI-Agent-Manager Security
+      - name: اجرای ساخت، تست و امنیت
         env:
           AGENT_PLAN: ${{ github.workspace }}/agent/chatgpt_plan.json
           AGENT_WORKSPACE: ${{ steps.target.outputs.workspace }}
           AGENT_RESULT: ${{ github.workspace }}/agent-result.json
-          SECURITY_RESULT: ${{ github.workspace }}/security-result.json
-          AI_MANAGER_ROOT: ${{ github.workspace }}/ai-agent-manager
         shell: bash
         run: |
           set -euo pipefail
           python agent/planner.py
           python agent/executor.py
-          python ai-agent-manager/manager_security.py
+          python security_check.py
 
       - name: ثبت نتیجه
         if: always()
@@ -195,15 +184,6 @@ jobs:
           cp -f agent-result.json agent-results/agent-result.json 2>/dev/null || true
           cp -f agent/chatgpt_plan.json agent-results/chatgpt_plan.json 2>/dev/null || true
           cp -f security-result.json agent-results/security-result.json 2>/dev/null || true
-          if [ -f agent-results/agent-result.json ]; then
-            python - <<'PY'
-          import json
-          from pathlib import Path
-          p=Path("agent-results/agent-result.json")
-          d=json.loads(p.read_text(encoding="utf-8"))
-          print(json.dumps({"success": d.get("success"), "summary": d.get("summary"), "error": d.get("error")}, ensure_ascii=False))
-          PY
-          fi
 
       - name: ثبت تغییرات Repository مقصد
         if: success() && github.event_name == 'repository_dispatch'
@@ -212,7 +192,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
@@ -220,7 +199,7 @@ jobs:
             echo "تغییری برای ثبت وجود ندارد."
             exit 0
           fi
-          git commit -m "feat: build project via AI-Agent-Manager"
+          git commit -m "ساخت پروژه با عامل خودکار"
           git push origin "HEAD:${TARGET_BRANCH}"
 
       - name: ثبت وضعیت نهایی اجرا
@@ -252,7 +231,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add agent/execution-state.json
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m "chore: publish autonomous execution state"
+          git commit -m "ثبت وضعیت نهایی اجرای عامل"
           git push origin "HEAD:${TARGET_BRANCH}"
 
       - name: گزارش اجرا
@@ -264,33 +243,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: ثبت خلاصه نتیجه در Repository Agent
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          mkdir -p agent-results
-          git add agent-results
-          if git diff --cached --quiet; then exit 0; fi
-          git commit -m "chore: record ChatGPT agent result"
-          git push origin HEAD:main
-
   deploy:
-    name: 🚀 Deploy پس از Security Gate
+    name: 🚀 انتشار پس از موفقیت
     needs: executor
     if: needs.executor.result == 'success' && github.event_name != 'repository_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
       - name: دریافت نسخه تأییدشده
         uses: actions/checkout@v6
       - name: بررسی سایت
-        shell: bash
         run: test -f site/index.html
       - name: آماده‌سازی GitHub Pages
         uses: actions/configure-pages@v5
-      - name: بسته‌بندی سایت برای Pages
+      - name: بسته‌بندی سایت
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
