@@ -4,8 +4,6 @@ on:
   push:
     paths:
       - "chat_requests/*.json"
-      - "agent/**"
-      - ".github/workflows/agent.yml"
   workflow_dispatch:
     inputs:
       task:
@@ -106,7 +104,7 @@ jobs:
             printf '%s\n' "$TASK"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-      - name: اجرای حلقه Build → Test → Security
+      - name: اجرای Build → Test → Security
         env:
           AGENT_TASK: ${{ steps.task.outputs.task }}
           AI_MANAGER_ROOT: ${{ github.workspace }}/ai-agent-manager
@@ -133,7 +131,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: ثبت خلاصه نتیجه در Repository
-        if: always()
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
