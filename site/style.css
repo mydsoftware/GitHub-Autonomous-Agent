@@ -1,11 +1,11 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
 body{
-  font-family:"Vazirmatn",Tahoma,system-ui,sans-serif;
+  font-family:"IRANYekanX","IRANYekan","IranYekan",Tahoma,system-ui,sans-serif;
   font-weight:400;
   color:#1a1a1a;
   background:#fff;
-  line-height:1.8;
+  line-height:1.85;
   font-size:16px;
   -webkit-font-smoothing:antialiased;
 }
@@ -16,7 +16,7 @@ a{color:inherit;text-decoration:none}
 /* Header */
 .header{
   position:sticky;top:0;z-index:10;
-  background:rgba(255,255,255,.85);
+  background:rgba(255,255,255,.88);
   backdrop-filter:blur(12px);
   border-bottom:1px solid #eee;
 }
@@ -64,8 +64,8 @@ a{color:inherit;text-decoration:none}
 .hero h1{
   font-size:clamp(28px,5vw,42px);
   font-weight:700;
-  line-height:1.4;
-  letter-spacing:-0.03em;
+  line-height:1.45;
+  letter-spacing:-0.02em;
   margin-bottom:20px;
   color:#111;
 }
@@ -107,7 +107,7 @@ a{color:inherit;text-decoration:none}
 .section.muted{background:#fafafa}
 .section h2{
   font-size:22px;
-  font-weight:600;
+  font-weight:700;
   letter-spacing:-0.02em;
   margin-bottom:36px;
   text-align:center;
