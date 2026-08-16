@@ -1,6 +1,11 @@
 name: اجرای عامل متصل به ChatGPT
 
 on:
+  push:
+    paths:
+      - "chat_requests/*.json"
+      - "agent/**"
+      - ".github/workflows/agent.yml"
   workflow_dispatch:
     inputs:
       task:
@@ -46,8 +51,6 @@ jobs:
       - name: بررسی ساختار Python
         run: python -m py_compile agent/security_gate.py
       - name: آزمون Security Gate
-        env:
-          AI_MANAGER_ROOT: ${{ github.workspace }}/ai-agent-manager
         run: |
           mkdir -p site
           printf '%s\n' '<script>eval("x")</script>' > site/index.html
@@ -62,7 +65,7 @@ jobs:
 
   executor:
     name: 🤖 اجرای Plan ChatGPT + AI-Agent-Manager Security
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'issues'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -82,62 +85,64 @@ jobs:
         id: task
         env:
           WORKFLOW_TASK: ${{ inputs.task }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
+          EVENT_NAME: ${{ github.event_name }}
         shell: bash
         run: |
           set -e
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then TASK="$WORKFLOW_TASK"; else TASK="$ISSUE_BODY"; fi
-          if [ -z "$(printf '%s' "$TASK" | tr -d '[:space:]')" ]; then exit 1; fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TASK="$WORKFLOW_TASK"
+          elif [ "$EVENT_NAME" = "issues" ]; then
+            TASK="$ISSUE_BODY"
+          else
+            REQUEST_FILE=$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^chat_requests/.*\.json$' | tail -n 1 || true)
+            test -n "$REQUEST_FILE" || REQUEST_FILE=$(find chat_requests -maxdepth 1 -type f -name '*.json' | sort | tail -n 1)
+            test -n "$REQUEST_FILE"
+            TASK=$(cat "$REQUEST_FILE")
+          fi
+          test -n "$(printf '%s' "$TASK" | tr -d '[:space:]')"
           {
             echo "task<<EOF"
             printf '%s\n' "$TASK"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-      - name: اجرای حلقه Build → Test → Security → Fix
+      - name: اجرای حلقه Build → Test → Security
         env:
           AGENT_TASK: ${{ steps.task.outputs.task }}
           AI_MANAGER_ROOT: ${{ github.workspace }}/ai-agent-manager
         shell: bash
         run: |
-          set -u
-          FEEDBACK=""
-          MAX_ROUNDS=8
-          SUCCESS=0
-          for ROUND in $(seq 1 $MAX_ROUNDS); do
-            echo "=== چرخه خودمختار $ROUND/$MAX_ROUNDS ==="
-            export AGENT_FEEDBACK="$FEEDBACK"
-            if ! python agent/planner.py; then FEEDBACK="Plan ChatGPT معتبر نیست یا ساختار آن خطا دارد."; continue; fi
-            if ! python agent/executor.py; then FEEDBACK="$(cat agent-result.json 2>/dev/null || echo Executor شکست خورد.)"; continue; fi
-            if python agent/security_gate.py; then SUCCESS=1; break; fi
-            FEEDBACK="$(cat security-result.json 2>/dev/null || echo Security Gate شکست خورد.)"
-            echo "Security Finding شناسایی شد؛ چرخه بعدی برای اصلاح اجرا می‌شود."
-          done
-          if [ "$SUCCESS" -ne 1 ]; then echo "Security Gate پس از $MAX_ROUNDS چرخه Pass نشد." >&2; exit 1; fi
-      - name: ثبت تغییرات
-        if: success()
+          set -euo pipefail
+          python agent/planner.py
+          python agent/executor.py
+          python agent/security_gate.py
+      - name: ثبت نتیجه
+        if: always()
         shell: bash
         run: |
-          set -e
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .
-          if git diff --cached --quiet; then exit 0; fi
-          git commit -m "🤖 اجرای Plan ChatGPT + Security Gate"
-          git fetch origin main
-          git rebase origin/main
-          git push origin HEAD:main
+          mkdir -p agent-results
+          cp -f agent-result.json agent-results/agent-result.json 2>/dev/null || true
+          cp -f agent/chatgpt_plan.json agent-results/chatgpt_plan.json 2>/dev/null || true
+          cp -f security-result.json agent-results/security-result.json 2>/dev/null || true
       - name: گزارش اجرا
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: گزارش-اجرای-Agent
-          path: |
-            agent-result.json
-            chatgpt_plan.json
-            security-result.json
+          name: گزارش-اجرای-Agent-${{ github.run_number }}
+          path: agent-results/
           if-no-files-found: ignore
           retention-days: 7
+      - name: ثبت خلاصه نتیجه در Repository
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p agent-results
+          git add agent-results
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "chore: record ChatGPT agent result"
+          git push origin HEAD:main
 
   deploy:
     name: 🚀 Deploy پس از Security Gate
