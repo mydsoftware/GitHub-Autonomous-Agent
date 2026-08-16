@@ -1,0 +1,14 @@
+{
+  "success": true,
+  "summary": "ساخت سایت فارسی، مدرن و ریسپانسیو درباره ماهواره مرکزی برای تست Executor و GitHub Pages.",
+  "tests": [
+    {
+      "command": "python -m py_compile agent/executor.py",
+      "code": 0,
+      "output": ""
+    }
+  ],
+  "source": "ChatGPT",
+  "error": null,
+  "files_applied": 2
+}
