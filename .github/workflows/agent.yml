@@ -4,8 +4,6 @@ on:
   push:
     paths:
       - "chat_requests/*.json"
-      - "agent/**"
-      - ".github/workflows/agent.yml"
   workflow_dispatch:
     inputs:
       task:
@@ -48,19 +46,21 @@ jobs:
         run: |
           test -n "$GH_TOKEN" || { echo "Secret GH_PAT برای اتصال به AI-Agent-Manager تنظیم نشده است." >&2; exit 1; }
           git clone --depth 1 --branch security-agent-release "https://x-access-token:${GH_TOKEN}@github.com/mydsoftware/AI-Agent-Manager.git" ai-agent-manager
-      - name: بررسی ساختار Python
-        run: python -m py_compile agent/security_gate.py
-      - name: آزمون Security Gate
+      - name: بررسی Security bridge
+        run: python -m py_compile agent/manager_security.py
+      - name: آزمون واقعی SecurityAgent
+        env:
+          AI_MANAGER_ROOT: ${{ github.workspace }}/ai-agent-manager
         run: |
           mkdir -p site
           printf '%s\n' '<script>eval("x")</script>' > site/index.html
-          if python agent/security_gate.py; then echo "Security Gate باید Finding را Block کند." >&2; exit 1; fi
+          if python agent/manager_security.py; then echo "SecurityAgent باید Finding را Block کند." >&2; exit 1; fi
           python - <<'PY'
           import json
           data=json.load(open('security-result.json', encoding='utf-8'))
-          assert data['passed'] is False
+          assert data['status'] == 'failed'
           assert any(f['severity'] == 'high' for f in data['findings'])
-          print('Security Gate integration test passed.')
+          print('AI-Agent-Manager SecurityAgent integration test passed.')
           PY
 
   executor:
@@ -106,7 +106,7 @@ jobs:
             printf '%s\n' "$TASK"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-      - name: اجرای حلقه Build → Test → Security
+      - name: اجرای Build → Test → AI-Agent-Manager Security
         env:
           AGENT_TASK: ${{ steps.task.outputs.task }}
           AI_MANAGER_ROOT: ${{ github.workspace }}/ai-agent-manager
@@ -115,7 +115,7 @@ jobs:
           set -euo pipefail
           python agent/planner.py
           python agent/executor.py
-          python agent/security_gate.py
+          python agent/manager_security.py
       - name: ثبت نتیجه
         if: always()
         shell: bash
@@ -133,7 +133,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: ثبت خلاصه نتیجه در Repository
-        if: always()
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
