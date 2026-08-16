@@ -4,8 +4,6 @@ on:
   push:
     paths:
       - "chat_requests/*.json"
-      - "agent/**"
-      - ".github/workflows/agent.yml"
   workflow_dispatch:
     inputs:
       task:
@@ -106,7 +104,7 @@ jobs:
             printf '%s\n' "$TASK"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-      - name: اجرای حلقه Build → Test → Security
+      - name: اجرای Build → Test → Security
         env:
           AGENT_TASK: ${{ steps.task.outputs.task }}
           AI_MANAGER_ROOT: ${{ github.workspace }}/ai-agent-manager
