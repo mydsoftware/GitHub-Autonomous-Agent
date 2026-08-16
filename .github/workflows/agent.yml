@@ -42,21 +42,19 @@ jobs:
         with:
           python-version: "3.12"
       - name: دریافت نسخه پایدار Security Agent
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
         shell: bash
         run: |
-          test -n "$GH_TOKEN" || { echo "Secret GH_PAT برای اتصال به AI-Agent-Manager تنظیم نشده است." >&2; exit 1; }
-          git clone --depth 1 --branch security-agent-release "https://x-access-token:${GH_TOKEN}@github.com/mydsoftware/AI-Agent-Manager.git" ai-agent-manager
+          set -euo pipefail
+          git clone --depth 1 --branch security-agent-release "https://github.com/mydsoftware/AI-Agent-Manager.git" ai-agent-manager
       - name: بررسی Security bridge
-        run: python -m py_compile agent/manager_security.py
+        run: python -m py_compile ai-agent-manager/manager_security.py
       - name: آزمون واقعی SecurityAgent
         env:
           AI_MANAGER_ROOT: ${{ github.workspace }}/ai-agent-manager
         run: |
           mkdir -p site
           printf '%s\n' '<script>eval("x")</script>' > site/index.html
-          if python agent/manager_security.py; then echo "SecurityAgent باید Finding را Block کند." >&2; exit 1; fi
+          if python ai-agent-manager/manager_security.py; then echo "SecurityAgent باید Finding را Block کند." >&2; exit 1; fi
           python - <<'PY'
           import json
           data=json.load(open('security-result.json', encoding='utf-8'))
@@ -83,36 +81,30 @@ jobs:
           python-version: "3.12"
 
       - name: دریافت نسخه پایدار Security Agent
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$GH_TOKEN" || { echo "Secret GH_PAT برای اتصال به AI-Agent-Manager تنظیم نشده است." >&2; exit 1; }
-          git clone --depth 1 --branch security-agent-release "https://x-access-token:${GH_TOKEN}@github.com/mydsoftware/AI-Agent-Manager.git" ai-agent-manager
+          git clone --depth 1 --branch security-agent-release "https://github.com/mydsoftware/AI-Agent-Manager.git" ai-agent-manager
 
-      - name: آماده‌سازی Repository مقصد
+      - name: تعیین Repository مقصد
         id: target
         env:
-          EVENT_NAME: ${{ github.event_name }}
           TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
           TARGET_BRANCH: ${{ github.event.client_payload.target_branch }}
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          EVENT_NAME: ${{ github.event_name }}
         shell: bash
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
             test -n "$TARGET_REPOSITORY" || { echo "target_repository در Dispatch وجود ندارد." >&2; exit 1; }
             BRANCH="${TARGET_BRANCH:-main}"
-            git clone --depth 1 --branch "$BRANCH" "https://x-access-token:${GH_TOKEN}@github.com/${TARGET_REPOSITORY}.git" target-project
-            echo "workspace=${GITHUB_WORKSPACE}/target-project" >> "$GITHUB_OUTPUT"
-            echo "repository=$TARGET_REPOSITORY" >> "$GITHUB_OUTPUT"
-            echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
           else
-            echo "workspace=${GITHUB_WORKSPACE}" >> "$GITHUB_OUTPUT"
-            echo "repository=${GITHUB_REPOSITORY}" >> "$GITHUB_OUTPUT"
-            echo "branch=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            BRANCH="${GITHUB_REF_NAME}"
+            echo "TARGET_REPOSITORY=$GITHUB_REPOSITORY" >> "$GITHUB_ENV"
           fi
+          echo "workspace=${GITHUB_WORKSPACE}" >> "$GITHUB_OUTPUT"
+          echo "repository=${TARGET_REPOSITORY:-$GITHUB_REPOSITORY}" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: دریافت Plan از ChatGPT
         id: task
@@ -161,7 +153,7 @@ jobs:
           set -euo pipefail
           python agent/planner.py
           python agent/executor.py
-          python agent/manager_security.py
+          python ai-agent-manager/manager_security.py
 
       - name: ثبت نتیجه
         if: always()
@@ -184,13 +176,11 @@ jobs:
       - name: ثبت تغییرات Repository مقصد
         if: success() && github.event_name == 'repository_dispatch'
         env:
-          TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
-          TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
           TARGET_BRANCH: ${{ steps.target.outputs.branch }}
         shell: bash
         run: |
           set -euo pipefail
-          cd "$TARGET_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
