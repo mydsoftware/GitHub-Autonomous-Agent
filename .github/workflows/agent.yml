@@ -69,6 +69,25 @@ jobs:
           echo "Repository مقصد: $REPO"
           echo "شاخه مقصد: $BRANCH"
 
+      - name: Boot Diagnostic و ثبت Commit اولیه
+        if: github.event_name == 'repository_dispatch'
+        env:
+          TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
+          TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
+          TARGET_BRANCH: ${{ steps.target.outputs.branch }}
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$TARGET_WORKSPACE"
+          mkdir -p agent
+          printf 'Agent boot OK\nrun=%s\nevent=%s\ntimestamp=%s\n' "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > agent/boot.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add agent/boot.txt
+          git commit -m "ثبت شروع اجرای Agent"
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${TARGET_REPOSITORY}.git" "HEAD:${TARGET_BRANCH}"
+
       - name: ساخت Plan فارسی
         env:
           EVENT_NAME: ${{ github.event_name }}
