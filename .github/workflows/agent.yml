@@ -16,43 +16,36 @@ permissions:
   contents: write
   issues: write
 
-env:
-  TARGET_GITHUB_TOKEN: ${{ secrets.GH_PAT }}
-
 jobs:
   executor:
     name: 🤖 اجرای Plan فارسی
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - name: دریافت کد عامل
-        uses: actions/checkout@v6
+      - name: دریافت Repository مقصد
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
 
-      - name: آماده‌سازی Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: بررسی دسترسی و ثبت تشخیص بوت
+      - name: ثبت Boot Diagnostic
         if: always()
         shell: bash
-        env:
-          TOKEN_PRESENT: ${{ secrets.GH_PAT != '' }}
         run: |
           set +e
-          mkdir -p diagnostics
+          mkdir -p diagnostics agent
           {
-            echo "نوع رویداد: $GITHUB_EVENT_NAME"
-            echo "شناسه اجرا: $GITHUB_RUN_ID"
-            echo "Repository عامل: $GITHUB_REPOSITORY"
-            echo "SHA: $GITHUB_SHA"
-            echo "Runner: $RUNNER_NAME"
-            echo "توکن GH_PAT تنظیم شده: $TOKEN_PRESENT"
-            echo "زمان: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "Agent boot OK"
+            echo "run=$GITHUB_RUN_ID"
+            echo "event=$GITHUB_EVENT_NAME"
+            echo "repository=$GITHUB_REPOSITORY"
+            echo "sha=$GITHUB_SHA"
+            echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } > diagnostics/boot.txt
+
+      - name: آماده‌سازی Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: دریافت Executor
         shell: bash
@@ -62,65 +55,8 @@ jobs:
           curl -fsSL "https://raw.githubusercontent.com/mydsoftware/GitHub-Autonomous-Agent/main/agent/executor.py" -o agent/executor.py
           test -s agent/executor.py
 
-      - name: تعیین Repository مقصد
-        id: target
-        env:
-          TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
-          TARGET_BRANCH: ${{ github.event.client_payload.target_branch }}
-          EVENT_NAME: ${{ github.event_name }}
-          TARGET_TOKEN: ${{ secrets.GH_PAT }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
-            test -n "$TARGET_REPOSITORY" || { echo "خطا: target_repository در Dispatch وجود ندارد." >&2; exit 1; }
-            test -n "$TARGET_TOKEN" || { echo "خطا: Secret با نام GH_PAT در Repository عامل تنظیم نشده است." >&2; exit 1; }
-            REPO="$TARGET_REPOSITORY"
-            BRANCH="${TARGET_BRANCH:-main}"
-            DIR="$RUNNER_TEMP/target-repository"
-            git clone --depth 1 --branch "$BRANCH" "https://x-access-token:${TARGET_TOKEN}@github.com/${REPO}.git" "$DIR"
-          else
-            REPO="$GITHUB_REPOSITORY"
-            BRANCH="$GITHUB_REF_NAME"
-            DIR="$GITHUB_WORKSPACE"
-          fi
-          test -d "$DIR/.git"
-          echo "repository=$REPO" >> "$GITHUB_OUTPUT"
-          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-          echo "workspace=$DIR" >> "$GITHUB_OUTPUT"
-
-      - name: Boot Diagnostic مستقل در مقصد
-        if: github.event_name == 'repository_dispatch'
-        id: boot
-        continue-on-error: true
-        env:
-          TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
-          TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
-          TARGET_BRANCH: ${{ steps.target.outputs.branch }}
-          TARGET_TOKEN: ${{ secrets.GH_PAT }}
-        shell: bash
-        run: |
-          set +e
-          cd "$TARGET_WORKSPACE"
-          mkdir -p agent
-          {
-            echo "Agent boot OK"
-            echo "run=$GITHUB_RUN_ID"
-            echo "event=$GITHUB_EVENT_NAME"
-            echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          } > agent/boot.txt
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add agent/boot.txt
-          git commit -m "ثبت شروع اجرای Agent"
-          COMMIT_CODE=$?
-          git push "https://x-access-token:${TARGET_TOKEN}@github.com/${TARGET_REPOSITORY}.git" "HEAD:${TARGET_BRANCH}"
-          PUSH_CODE=$?
-          echo "boot_commit_code=$COMMIT_CODE" >> "$GITHUB_STEP_SUMMARY"
-          echo "boot_push_code=$PUSH_CODE" >> "$GITHUB_STEP_SUMMARY"
-          exit 0
-
-      - name: ساخت Plan فارسی
+      - name: دریافت Plan از Dispatch
+        id: plan
         env:
           EVENT_NAME: ${{ github.event_name }}
           DISPATCH_PAYLOAD: ${{ toJson(github.event.client_payload) }}
@@ -128,16 +64,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p agent
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
             python - <<'PY'
           import json, os
           payload=json.loads(os.environ['DISPATCH_PAYLOAD'])
           plan=payload.get('plan')
-          if not isinstance(plan,dict): raise SystemExit('Plan وجود ندارد.')
+          if not isinstance(plan,dict):
+              raise SystemExit('Plan وجود ندارد.')
           if not isinstance(plan.get('files'),list) or not isinstance(plan.get('commands'),list) or plan.get('done') is not True:
               raise SystemExit('Plan باید files، commands و done=true داشته باشد.')
-          with open('agent/chatgpt_plan.json','w',encoding='utf-8') as f: json.dump(plan,f,ensure_ascii=False,indent=2)
+          with open('agent/chatgpt_plan.json','w',encoding='utf-8') as f:
+              json.dump(plan,f,ensure_ascii=False,indent=2)
           PY
           elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             printf '%s\n' "$WORKFLOW_TASK" > agent/chatgpt_plan.json
@@ -150,99 +87,76 @@ jobs:
           test -s agent/chatgpt_plan.json
           python -m json.tool agent/chatgpt_plan.json >/dev/null
 
-      - name: آماده‌سازی Workspace مقصد
-        env:
-          TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$TARGET_WORKSPACE/agent"
-          cp "$GITHUB_WORKSPACE/agent/executor.py" "$TARGET_WORKSPACE/agent/executor.py"
-          cp "$GITHUB_WORKSPACE/agent/chatgpt_plan.json" "$TARGET_WORKSPACE/agent/chatgpt_plan.json"
-          if [ -f "$GITHUB_WORKSPACE/security_check.py" ]; then cp "$GITHUB_WORKSPACE/security_check.py" "$TARGET_WORKSPACE/security_check.py"; fi
-          test -s "$TARGET_WORKSPACE/agent/executor.py"
-          test -s "$TARGET_WORKSPACE/agent/chatgpt_plan.json"
-          python -m json.tool "$TARGET_WORKSPACE/agent/chatgpt_plan.json" >/dev/null
-
-      - name: اجرای Executor با گزارش مستقل
+      - name: اجرای Executor
         id: run_agent
         continue-on-error: true
         env:
-          AGENT_PLAN: ${{ steps.target.outputs.workspace }}/agent/chatgpt_plan.json
-          AGENT_WORKSPACE: ${{ steps.target.outputs.workspace }}
+          AGENT_PLAN: ${{ github.workspace }}/agent/chatgpt_plan.json
+          AGENT_WORKSPACE: ${{ github.workspace }}
           AGENT_RESULT: ${{ github.workspace }}/agent-result.json
         shell: bash
         run: |
           set +e
-          python "$AGENT_WORKSPACE/agent/executor.py" > "$GITHUB_WORKSPACE/executor-output.txt" 2>&1
+          python "$AGENT_WORKSPACE/agent/executor.py" > executor-output.txt 2>&1
           CODE=$?
-          echo "$CODE" > "$GITHUB_WORKSPACE/executor-exit-code.txt"
-          cp "$GITHUB_WORKSPACE/agent-result.json" "$AGENT_WORKSPACE/agent/agent-result.json" 2>/dev/null || true
+          echo "$CODE" > executor-exit-code.txt
           {
             echo "=== کد خروج Executor ==="
             echo "$CODE"
             echo "=== خروجی Executor ==="
-            cat "$GITHUB_WORKSPACE/executor-output.txt"
+            cat executor-output.txt
             echo "=== نتیجه Executor ==="
-            cat "$GITHUB_WORKSPACE/agent-result.json" 2>/dev/null || echo "agent-result.json تولید نشد."
-          } > "$AGENT_WORKSPACE/agent/executor-debug.txt"
+            cat agent-result.json 2>/dev/null || echo "agent-result.json تولید نشد."
+          } > agent/executor-debug.txt
           exit "$CODE"
 
-      - name: ثبت گزارش در Repository مقصد
-        if: always() && github.event_name == 'repository_dispatch'
-        env:
-          TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
-          TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
-          TARGET_BRANCH: ${{ steps.target.outputs.branch }}
-          TARGET_TOKEN: ${{ secrets.GH_PAT }}
+      - name: ثبت نتیجه مستقل
+        if: always()
         shell: bash
         run: |
           set +e
-          cd "$TARGET_WORKSPACE"
           mkdir -p agent
-          if [ ! -f agent/agent-result.json ] && [ ! -f agent/executor-debug.txt ]; then
-            printf '{"status":"agent-failed-before-executor","run_id":"%s","timestamp":"%s"}\n' "$GITHUB_RUN_ID" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > agent/failure.json
+          if [ ! -f agent-result.json ]; then
+            printf '{"status":"agent-failed-before-result","run_id":"%s","event":"%s","timestamp":"%s"}\n' "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > agent/failure.json
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "ثبت گزارش نهایی اجرای عامل" >/tmp/commit.log 2>&1
+          git commit -m "ثبت گزارش اجرای Agent" >/tmp/agent-commit.log 2>&1
           COMMIT_CODE=$?
-          git push "https://x-access-token:${TARGET_TOKEN}@github.com/${TARGET_REPOSITORY}.git" "HEAD:${TARGET_BRANCH}" >/tmp/push.log 2>&1
+          git push origin "HEAD:${GITHUB_REF_NAME}" >/tmp/agent-push.log 2>&1
           PUSH_CODE=$?
-          echo "report_commit_code=$COMMIT_CODE" >> "$GITHUB_STEP_SUMMARY"
-          echo "report_push_code=$PUSH_CODE" >> "$GITHUB_STEP_SUMMARY"
-          echo "گزارش Commit: $COMMIT_CODE"
-          echo "گزارش Push: $PUSH_CODE"
-          exit 0
+          echo "commit_code=$COMMIT_CODE"
+          echo "push_code=$PUSH_CODE"
+          cat /tmp/agent-commit.log || true
+          cat /tmp/agent-push.log || true
 
       - name: نمایش گزارش
         if: always()
         shell: bash
         run: |
-          echo "=== کد خروج Executor ==="
+          echo "=== خروج Executor ==="
           cat executor-exit-code.txt 2>/dev/null || true
-          echo "=== خروجی Executor ==="
-          cat executor-output.txt 2>/dev/null || true
-          echo "=== نتیجه Executor ==="
-          cat agent-result.json 2>/dev/null || true
+          echo "=== گزارش ==="
+          cat agent/executor-debug.txt 2>/dev/null || true
+          cat agent/failure.json 2>/dev/null || true
 
-      - name: آپلود گزارش مستقل
+      - name: آپلود گزارش
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v4
         with:
-          name: گزارش-مستقل-Agent-${{ github.run_number }}
+          name: گزارش-Agent-${{ github.run_number }}
           path: |
             diagnostics/
+            agent/
             agent-result.json
             executor-output.txt
             executor-exit-code.txt
-            agent/chatgpt_plan.json
           if-no-files-found: ignore
           retention-days: 7
 
       - name: شکست نهایی در صورت شکست Executor
         if: steps.run_agent.outcome == 'failure'
         run: |
-          echo "Executor شکست خورد؛ گزارش مستقل ثبت شده است."
+          echo "Executor شکست خورد؛ گزارش در Repository ثبت شده است."
           exit 1
