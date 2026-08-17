@@ -16,6 +16,9 @@ permissions:
   contents: write
   issues: write
 
+env:
+  TARGET_GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
+
 jobs:
   executor:
     name: 🤖 اجرای Plan فارسی
@@ -33,20 +36,23 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: ایجاد گزارش بوت مستقل
+      - name: بررسی دسترسی و ثبت تشخیص بوت
         if: always()
         shell: bash
+        env:
+          TOKEN_PRESENT: ${{ secrets.AGENT_GITHUB_TOKEN != '' }}
         run: |
           set +e
-          mkdir -p "$GITHUB_WORKSPACE/diagnostics"
+          mkdir -p diagnostics
           {
             echo "نوع رویداد: $GITHUB_EVENT_NAME"
             echo "شناسه اجرا: $GITHUB_RUN_ID"
-            echo "Repository: $GITHUB_REPOSITORY"
+            echo "Repository عامل: $GITHUB_REPOSITORY"
             echo "SHA: $GITHUB_SHA"
             echo "Runner: $RUNNER_NAME"
+            echo "توکن اختصاصی مقصد تنظیم شده: $TOKEN_PRESENT"
             echo "زمان: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          } > "$GITHUB_WORKSPACE/diagnostics/boot.txt"
+          } > diagnostics/boot.txt
 
       - name: دریافت Executor
         shell: bash
@@ -62,16 +68,17 @@ jobs:
           TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
           TARGET_BRANCH: ${{ github.event.client_payload.target_branch }}
           EVENT_NAME: ${{ github.event_name }}
-          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
-            test -n "$TARGET_REPOSITORY" || { echo "target_repository در Dispatch وجود ندارد." >&2; exit 1; }
+            test -n "$TARGET_REPOSITORY" || { echo "خطا: target_repository در Dispatch وجود ندارد." >&2; exit 1; }
+            test -n "$TARGET_TOKEN" || { echo "خطا: Secret با نام AGENT_GITHUB_TOKEN در Repository عامل تنظیم نشده است." >&2; exit 1; }
             REPO="$TARGET_REPOSITORY"
             BRANCH="${TARGET_BRANCH:-main}"
             DIR="$RUNNER_TEMP/target-repository"
-            git clone --depth 1 --branch "$BRANCH" "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" "$DIR"
+            git clone --depth 1 --branch "$BRANCH" "https://x-access-token:${TARGET_TOKEN}@github.com/${REPO}.git" "$DIR"
           else
             REPO="$GITHUB_REPOSITORY"
             BRANCH="$GITHUB_REF_NAME"
@@ -90,7 +97,7 @@ jobs:
           TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
           TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
           TARGET_BRANCH: ${{ steps.target.outputs.branch }}
-          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
         shell: bash
         run: |
           set +e
@@ -107,7 +114,7 @@ jobs:
           git add agent/boot.txt
           git commit -m "ثبت شروع اجرای Agent"
           COMMIT_CODE=$?
-          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${TARGET_REPOSITORY}.git" "HEAD:${TARGET_BRANCH}"
+          git push "https://x-access-token:${TARGET_TOKEN}@github.com/${TARGET_REPOSITORY}.git" "HEAD:${TARGET_BRANCH}"
           PUSH_CODE=$?
           echo "boot_commit_code=$COMMIT_CODE" >> "$GITHUB_STEP_SUMMARY"
           echo "boot_push_code=$PUSH_CODE" >> "$GITHUB_STEP_SUMMARY"
@@ -187,20 +194,26 @@ jobs:
           TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
           TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
           TARGET_BRANCH: ${{ steps.target.outputs.branch }}
-          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
         shell: bash
         run: |
           set +e
           cd "$TARGET_WORKSPACE"
+          mkdir -p agent
+          if [ ! -f agent/agent-result.json ] && [ ! -f agent/executor-debug.txt ]; then
+            printf '{"status":"agent-failed-before-executor","run_id":"%s","timestamp":"%s"}\n' "$GITHUB_RUN_ID" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > agent/failure.json
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "ثبت گزارش اجرای عامل خودکار"
+          git commit -m "ثبت گزارش نهایی اجرای عامل" >/tmp/commit.log 2>&1
           COMMIT_CODE=$?
-          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${TARGET_REPOSITORY}.git" "HEAD:${TARGET_BRANCH}"
+          git push "https://x-access-token:${TARGET_TOKEN}@github.com/${TARGET_REPOSITORY}.git" "HEAD:${TARGET_BRANCH}" >/tmp/push.log 2>&1
           PUSH_CODE=$?
           echo "report_commit_code=$COMMIT_CODE" >> "$GITHUB_STEP_SUMMARY"
           echo "report_push_code=$PUSH_CODE" >> "$GITHUB_STEP_SUMMARY"
+          echo "گزارش Commit: $COMMIT_CODE"
+          echo "گزارش Push: $PUSH_CODE"
           exit 0
 
       - name: نمایش گزارش
