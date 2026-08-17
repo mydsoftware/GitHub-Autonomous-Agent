@@ -17,7 +17,7 @@ permissions:
   issues: write
 
 env:
-  TARGET_GITHUB_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
+  TARGET_GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
 jobs:
   executor:
@@ -40,7 +40,7 @@ jobs:
         if: always()
         shell: bash
         env:
-          TOKEN_PRESENT: ${{ secrets.AGENT_GITHUB_TOKEN != '' }}
+          TOKEN_PRESENT: ${{ secrets.GH_PAT != '' }}
         run: |
           set +e
           mkdir -p diagnostics
@@ -50,7 +50,7 @@ jobs:
             echo "Repository عامل: $GITHUB_REPOSITORY"
             echo "SHA: $GITHUB_SHA"
             echo "Runner: $RUNNER_NAME"
-            echo "توکن اختصاصی مقصد تنظیم شده: $TOKEN_PRESENT"
+            echo "توکن GH_PAT تنظیم شده: $TOKEN_PRESENT"
             echo "زمان: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } > diagnostics/boot.txt
 
@@ -68,13 +68,13 @@ jobs:
           TARGET_REPOSITORY: ${{ github.event.client_payload.target_repository }}
           TARGET_BRANCH: ${{ github.event.client_payload.target_branch }}
           EVENT_NAME: ${{ github.event_name }}
-          TARGET_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
+          TARGET_TOKEN: ${{ secrets.GH_PAT }}
         shell: bash
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "repository_dispatch" ]; then
             test -n "$TARGET_REPOSITORY" || { echo "خطا: target_repository در Dispatch وجود ندارد." >&2; exit 1; }
-            test -n "$TARGET_TOKEN" || { echo "خطا: Secret با نام AGENT_GITHUB_TOKEN در Repository عامل تنظیم نشده است." >&2; exit 1; }
+            test -n "$TARGET_TOKEN" || { echo "خطا: Secret با نام GH_PAT در Repository عامل تنظیم نشده است." >&2; exit 1; }
             REPO="$TARGET_REPOSITORY"
             BRANCH="${TARGET_BRANCH:-main}"
             DIR="$RUNNER_TEMP/target-repository"
@@ -97,7 +97,7 @@ jobs:
           TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
           TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
           TARGET_BRANCH: ${{ steps.target.outputs.branch }}
-          TARGET_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
+          TARGET_TOKEN: ${{ secrets.GH_PAT }}
         shell: bash
         run: |
           set +e
@@ -194,7 +194,7 @@ jobs:
           TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
           TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
           TARGET_BRANCH: ${{ steps.target.outputs.branch }}
-          TARGET_TOKEN: ${{ secrets.AGENT_GITHUB_TOKEN }}
+          TARGET_TOKEN: ${{ secrets.GH_PAT }}
         shell: bash
         run: |
           set +e
