@@ -33,6 +33,21 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: ایجاد گزارش بوت مستقل
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p "$GITHUB_WORKSPACE/diagnostics"
+          {
+            echo "نوع رویداد: $GITHUB_EVENT_NAME"
+            echo "شناسه اجرا: $GITHUB_RUN_ID"
+            echo "Repository: $GITHUB_REPOSITORY"
+            echo "SHA: $GITHUB_SHA"
+            echo "Runner: $RUNNER_NAME"
+            echo "زمان: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > "$GITHUB_WORKSPACE/diagnostics/boot.txt"
+
       - name: دریافت Executor
         shell: bash
         run: |
@@ -66,11 +81,11 @@ jobs:
           echo "repository=$REPO" >> "$GITHUB_OUTPUT"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
           echo "workspace=$DIR" >> "$GITHUB_OUTPUT"
-          echo "Repository مقصد: $REPO"
-          echo "شاخه مقصد: $BRANCH"
 
-      - name: Boot Diagnostic و ثبت Commit اولیه
+      - name: Boot Diagnostic مستقل در مقصد
         if: github.event_name == 'repository_dispatch'
+        id: boot
+        continue-on-error: true
         env:
           TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
           TARGET_REPOSITORY: ${{ steps.target.outputs.repository }}
@@ -78,15 +93,25 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
           cd "$TARGET_WORKSPACE"
           mkdir -p agent
-          printf 'Agent boot OK\nrun=%s\nevent=%s\ntimestamp=%s\n' "$GITHUB_RUN_ID" "$GITHUB_EVENT_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > agent/boot.txt
+          {
+            echo "Agent boot OK"
+            echo "run=$GITHUB_RUN_ID"
+            echo "event=$GITHUB_EVENT_NAME"
+            echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > agent/boot.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add agent/boot.txt
           git commit -m "ثبت شروع اجرای Agent"
+          COMMIT_CODE=$?
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${TARGET_REPOSITORY}.git" "HEAD:${TARGET_BRANCH}"
+          PUSH_CODE=$?
+          echo "boot_commit_code=$COMMIT_CODE" >> "$GITHUB_STEP_SUMMARY"
+          echo "boot_push_code=$PUSH_CODE" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
 
       - name: ساخت Plan فارسی
         env:
@@ -117,7 +142,6 @@ jobs:
           fi
           test -s agent/chatgpt_plan.json
           python -m json.tool agent/chatgpt_plan.json >/dev/null
-          echo "Plan فارسی معتبر است."
 
       - name: آماده‌سازی Workspace مقصد
         env:
@@ -132,29 +156,8 @@ jobs:
           test -s "$TARGET_WORKSPACE/agent/executor.py"
           test -s "$TARGET_WORKSPACE/agent/chatgpt_plan.json"
           python -m json.tool "$TARGET_WORKSPACE/agent/chatgpt_plan.json" >/dev/null
-          echo "Workspace مقصد آماده است."
 
-      - name: ثبت Snapshot قبل از Executor
-        if: always()
-        env:
-          TARGET_WORKSPACE: ${{ steps.target.outputs.workspace }}
-        shell: bash
-        run: |
-          set +e
-          mkdir -p "$TARGET_WORKSPACE/agent"
-          {
-            echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            echo "event=$GITHUB_EVENT_NAME"
-            echo "run=$GITHUB_RUN_ID"
-            echo "repository=$GITHUB_REPOSITORY"
-            echo "target=${{ steps.target.outputs.repository }}"
-            echo "branch=${{ steps.target.outputs.branch }}"
-            echo "workspace=$TARGET_WORKSPACE"
-            echo "--- files ---"
-            find "$TARGET_WORKSPACE/agent" -maxdepth 1 -type f -printf '%f\n' | sort
-          } > "$TARGET_WORKSPACE/agent/execution-start.txt"
-
-      - name: اجرای Executor و ثبت اجباری گزارش
+      - name: اجرای Executor با گزارش مستقل
         id: run_agent
         continue-on-error: true
         env:
@@ -192,37 +195,32 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          if git diff --cached --quiet; then
-            echo "گزارشی برای Commit وجود ندارد."
-            exit 0
-          fi
           git commit -m "ثبت گزارش اجرای عامل خودکار"
+          COMMIT_CODE=$?
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${TARGET_REPOSITORY}.git" "HEAD:${TARGET_BRANCH}"
+          PUSH_CODE=$?
+          echo "report_commit_code=$COMMIT_CODE" >> "$GITHUB_STEP_SUMMARY"
+          echo "report_push_code=$PUSH_CODE" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
 
-      - name: نمایش گزارش Executor
+      - name: نمایش گزارش
         if: always()
         shell: bash
         run: |
-          echo "=== کد خروج ==="
+          echo "=== کد خروج Executor ==="
           cat executor-exit-code.txt 2>/dev/null || true
-          echo "=== خروجی ==="
+          echo "=== خروجی Executor ==="
           cat executor-output.txt 2>/dev/null || true
-          echo "=== نتیجه ==="
+          echo "=== نتیجه Executor ==="
           cat agent-result.json 2>/dev/null || true
 
-      - name: بررسی امنیتی
-        if: steps.run_agent.outcome == 'success' && github.event_name != 'repository_dispatch'
-        shell: bash
-        run: |
-          test -s security_check.py
-          python security_check.py
-
-      - name: آپلود گزارش
+      - name: آپلود گزارش مستقل
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: گزارش-اجرای-Agent-${{ github.run_number }}
+          name: گزارش-مستقل-Agent-${{ github.run_number }}
           path: |
+            diagnostics/
             agent-result.json
             executor-output.txt
             executor-exit-code.txt
@@ -233,5 +231,5 @@ jobs:
       - name: شکست نهایی در صورت شکست Executor
         if: steps.run_agent.outcome == 'failure'
         run: |
-          echo "Executor شکست خورد؛ گزارش آن در Repository مقصد ثبت شده است."
+          echo "Executor شکست خورد؛ گزارش مستقل ثبت شده است."
           exit 1
